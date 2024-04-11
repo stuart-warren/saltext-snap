@@ -834,6 +834,8 @@ def _list_api(name=None, revisions=False, verbose=False):
                 parsed["notes"].append("disabled")
             if snap["publisher"]["validation"] == "verified":
                 parsed["publisher"] += "**"
+            elif snap["publisher"]["validation"] == "starred":
+                parsed["publisher"] += "*"
         parsed["enabled"] = snap["status"] == "active"
         parsed["classic"] = snap["confinement"] == "classic"
         if "hold" in snap:

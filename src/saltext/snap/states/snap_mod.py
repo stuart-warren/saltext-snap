@@ -94,7 +94,7 @@ def disabled(name):
     return ret
 
 
-def installed(name, channel="latest/stable", revision=None, classic=False):
+def installed(name, channel="latest/stable", revision=None, classic=False, held=None):
     """
     Ensure a snap is installed.
 
@@ -113,6 +113,10 @@ def installed(name, channel="latest/stable", revision=None, classic=False):
     classic
         Enable classic mode and disable security confinement.
         Defaults to false.
+
+    held
+        Whether the snap should be excluded from general refreshes.
+        Optional. If unset, leaves the setting unmanaged.
     """
 
     def _check_changes(curr):
@@ -128,6 +132,8 @@ def installed(name, channel="latest/stable", revision=None, classic=False):
                 revision = None
         if revision and curr["revision"] != str(revision):
             changes["revision"] = {"old": curr["revision"], "new": str(revision)}
+        if held is not None and curr["held"] is not held:
+            changes["held"] = {"old": curr["held"], "new": held}
         return changes
 
     ret = {
@@ -140,20 +146,28 @@ def installed(name, channel="latest/stable", revision=None, classic=False):
     try:
         curr = __salt__["snap.list"](name)
         if curr:
-            ret["changes"] = _check_changes(curr[name])
+            changes = _check_changes(curr[name])
             verb = "modified"
         else:
-            ret["changes"]["installed"] = name
+            changes = {"installed": name}
             verb = "installed"
-        if not ret["changes"]:
+        if not changes:
             return ret
         if __opts__["test"]:
             ret["result"] = None
             ret["comment"] = f"Would have {verb} the snap"
+            ret["changes"] = changes
             return ret
-        __salt__["snap.install"](
-            name, channel=channel, revision=revision, classic=classic, refresh=bool(curr)
-        )
+        held_change = changes.pop("held", None)
+        if changes:
+            __salt__["snap.install"](
+                name, channel=channel, revision=revision, classic=classic, refresh=bool(curr)
+            )
+            ret["changes"].update(changes)
+        if held_change:
+            func = "hold" if held else "unhold"
+            __salt__[f"snap.{func}"](name)
+            ret["changes"].update({"held": held_change})
         new = __salt__["snap.list"](name)
         if not new:
             raise CommandExecutionError(

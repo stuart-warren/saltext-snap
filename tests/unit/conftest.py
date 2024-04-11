@@ -75,6 +75,7 @@ def snap_list():
             "classic": False,
             "devmode": False,
             "enabled": True,
+            "held": False,
         },
         "core": {
             "name": "core",
@@ -86,6 +87,7 @@ def snap_list():
             "classic": False,
             "devmode": False,
             "enabled": True,
+            "held": False,
         },
         "core18": {
             "name": "core18",
@@ -97,6 +99,7 @@ def snap_list():
             "classic": False,
             "devmode": False,
             "enabled": False,
+            "held": False,
         },
         "gnome-3-28-1804": {
             "name": "gnome-3-28-1804",
@@ -108,6 +111,7 @@ def snap_list():
             "classic": False,
             "devmode": False,
             "enabled": True,
+            "held": False,
         },
         "gtk-common-themes": {
             "name": "gtk-common-themes",
@@ -119,6 +123,7 @@ def snap_list():
             "classic": False,
             "devmode": False,
             "enabled": False,
+            "held": False,
         },
         "hello-world": {
             "name": "hello-world",
@@ -126,10 +131,11 @@ def snap_list():
             "revision": "28",
             "channel": "latest/stable",
             "publisher": "canonical**",
-            "notes": [],
+            "notes": ["held"],
             "classic": False,
             "devmode": False,
             "enabled": True,
+            "held": True,
         },
         "yubioath-desktop": {
             "name": "yubioath-desktop",
@@ -141,6 +147,7 @@ def snap_list():
             "classic": False,
             "devmode": False,
             "enabled": True,
+            "held": False,
         },
     }
 

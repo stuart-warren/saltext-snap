@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import shlex
+from datetime import datetime
 
 import salt.utils.path
 import salt.utils.yamlloader
@@ -80,12 +81,56 @@ def enable(name):
 
     .. code-block:: bash
 
-        salt '*' snap.en able hello-world
+        salt '*' snap.enable hello-world
 
     name
         The name of the snap.
     """
     cmd = ["snap", "enable", name]
+    _run(cmd)
+    return True
+
+
+def hold(name, duration=None):
+    """
+    Exclude a snap from general refreshes.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' snap.hold hello-world
+
+    name
+        The name of the snap.
+
+    duration
+        Optional duration to hold for, specified as a time string
+        with a unit. If unspecified, holds forever until the snap
+        is manually unheld.
+    """
+    hold = "--hold"
+    if duration:
+        hold += f"={duration}"
+    cmd = ["snap", "refresh", hold, name]
+    _run(cmd)
+    return True
+
+
+def unhold(name):
+    """
+    Remove a hold on a snap.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' snap.unhold hello-world
+
+    name
+        The name of the snap.
+    """
+    cmd = ["snap", "refresh", "--unhold", name]
     _run(cmd)
     return True
 
@@ -209,6 +254,25 @@ def is_enabled(name):
     return snapinfo[name]["enabled"]
 
 
+def is_held(name):
+    """
+    Check whether a snap is held.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' snap.is_held hello-world
+
+    name
+        The name of the snap.
+    """
+    snapinfo = list_(name)
+    if not snapinfo:
+        raise CommandExecutionError(f'snap "{name}" is not installed')
+    return snapinfo[name]["held"]
+
+
 def is_installed(name):
     """
     Check whether a snap is installed.
@@ -225,7 +289,7 @@ def is_installed(name):
     return bool(list_(name, revisions=True))
 
 
-def is_uptodate(name=None):
+def is_uptodate(name=None, exclude_held=False):
     """
     Check whether a snap/all installed snaps are up to date.
 
@@ -238,12 +302,15 @@ def is_uptodate(name=None):
 
     name
         The name of the snap. Optional. If missing, will check all snaps.
+
+    exclude_held
+        Count held snaps as up to date. Defaults to False.
     """
     if name and not is_installed(name):
         raise CommandExecutionError(f'snap "{name}" is not installed')
     if name is None:
-        return not bool(list_upgrades())
-    return name not in list_upgrades()
+        return not bool(list_upgrades(exclude_held=exclude_held))
+    return name not in list_upgrades(exclude_held=exclude_held)
 
 
 def list_(name=None, revisions=False, verbose=False):
@@ -275,7 +342,7 @@ def list_(name=None, revisions=False, verbose=False):
     return _list_cli(name, revisions)
 
 
-def list_upgrades():
+def list_upgrades(exclude_held=False):
     """
     List available upgrades.
 
@@ -284,11 +351,17 @@ def list_upgrades():
     .. code-block:: bash
 
         salt '*' snap.list_upgrades
+
+    exclude_held
+        Don't list held snaps as upgradable. Defaults to False.
     """
     cmd = ["snap", "refresh", "--unicode=never", "--color=never", "--list"]
     ret = _parse_list(_run(cmd))
     for data in ret.values():
         data["size"] = data.pop("channel")
+    if exclude_held:
+        snaps = list_(list(ret))
+        ret = {snap: data for snap, data in ret.items() if not snaps[snap]["held"]}
     return ret
 
 
@@ -763,6 +836,14 @@ def _list_api(name=None, revisions=False, verbose=False):
                 parsed["publisher"] += "**"
         parsed["enabled"] = snap["status"] == "active"
         parsed["classic"] = snap["confinement"] == "classic"
+        if "hold" in snap:
+            held_until = _time(snap["hold"])
+            parsed["held"] = datetime.now(tz=held_until.tzinfo) < held_until
+            if parsed["held"]:
+                parsed["notes"].append("held")
+        else:
+            parsed["held"] = False
+        parsed["notes"].sort()
         if name not in ret and revisions:
             ret[name] = []
         if revisions:
@@ -773,6 +854,16 @@ def _list_api(name=None, revisions=False, verbose=False):
         ret[name] = parsed
 
     return ret
+
+
+def _time(iso):
+    try:
+        return datetime.fromisoformat(iso)
+    except ValueError:
+        # Python < 3.11
+        iso = re.sub(r"\.[\d]+", "", iso)
+        iso = re.sub(r"Z$", "+00:00", iso)
+        return datetime.fromisoformat(iso)
 
 
 def _list_cli(name=None, revisions=False):
@@ -789,6 +880,7 @@ def _list_cli(name=None, revisions=False):
         data["enabled"] = "disabled" not in data["notes"]
         data["classic"] = "classic" in data["notes"]
         data["devmode"] = "devmode" in data["notes"]
+        data["held"] = "held" in data["notes"]
 
     cmd = ["snap", "list", "--unicode=never", "--color=never"]
     if revisions:

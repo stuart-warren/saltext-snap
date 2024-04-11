@@ -11,8 +11,9 @@ from salt.exceptions import CommandExecutionError
 @pytest.fixture
 def global_state(snap_list):
     return {
-        "disabled": [snp for snp, data in snap_list.items() if "disabled" in data["notes"]],
+        "disabled": [snp for snp, data in snap_list.items() if not data["enabled"]],
         "removed": [],
+        "held": [snp for snp, data in snap_list.items() if data["held"]],
         "snap_list": snap_list,
     }
 
@@ -74,6 +75,34 @@ def snap_is_enabled_mock(global_state):
         return name not in global_state["disabled"]
 
     return Mock(spec=snap_module.is_enabled, side_effect=_is_enabled)
+
+
+@pytest.fixture
+def snap_is_held_mock(global_state):
+    def _is_held(name):
+        return name in global_state["held"]
+
+    return Mock(spec=snap_module.is_held, side_effect=_is_held)
+
+
+@pytest.fixture
+def snap_hold_mock(global_state, snap_list):
+    def _hold(name):
+        if name not in global_state["held"]:
+            global_state["held"].append(name)
+        snap_list[name]["held"] = True
+
+    return Mock(spec=snap_module.hold, side_effect=_hold)
+
+
+@pytest.fixture
+def snap_unhold_mock(global_state, snap_list):
+    def _unhold(name):
+        if name in global_state["held"]:
+            global_state["held"].remove(name)
+        snap_list[name]["held"] = False
+
+    return Mock(spec=snap_module.unhold, side_effect=_unhold)
 
 
 @pytest.fixture
@@ -189,6 +218,9 @@ def configure_loader_modules(
     snap_is_enabled_mock,
     snap_enable_mock,
     snap_disable_mock,
+    snap_is_held_mock,
+    snap_hold_mock,
+    snap_unhold_mock,
     snap_remove_mock,
     snap_services_mock,
     snap_service_enabled_mock,
@@ -209,6 +241,9 @@ def configure_loader_modules(
                 "snap.is_enabled": snap_is_enabled_mock,
                 "snap.enable": snap_enable_mock,
                 "snap.disable": snap_disable_mock,
+                "snap.is_held": snap_is_held_mock,
+                "snap.hold": snap_hold_mock,
+                "snap.unhold": snap_unhold_mock,
                 "snap.remove": snap_remove_mock,
                 "snap.services": snap_services_mock,
                 "snap.service_enabled": snap_service_enabled_mock,
@@ -431,58 +466,6 @@ def test_service_dead_mod_watch_multi(testmode):
     assert ("Would have" in ret["comment"]) is testmode
 
 
-@pytest.mark.parametrize(
-    "name,channel,revision,changes",
-    (
-        ("hello-world", None, None, False),
-        (
-            "hello-world",
-            "latest/edge",
-            None,
-            {"channel": {"old": "latest/stable", "new": "latest/edge"}},
-        ),
-        (
-            "hello-world",
-            None,
-            29,
-            {"revision": {"old": "28", "new": "29"}},
-        ),
-        (
-            "hello-world",
-            None,
-            "latest",
-            {"revision": {"old": "28", "new": "29"}},
-        ),
-        (
-            "core",
-            None,
-            "latest",
-            False,
-        ),
-        (
-            "new-snap",
-            None,
-            None,
-            {"installed": "new-snap"},
-        ),
-    ),
-)
-def test_snap_installed(name, channel, revision, changes, testmode):
-    ret = snap.installed(name, channel=channel, revision=revision)
-    assert ret["result"] is not False
-    if changes:
-        assert (ret["result"] is None) is testmode
-        assert ret["changes"] == changes
-        if "installed" in changes:
-            assert "nstalled the snap" in ret["comment"]
-        else:
-            assert "odified the snap" in ret["comment"]
-        assert ("Would have" in ret["comment"]) is testmode
-    else:
-        assert ret["result"] is True
-        assert not ret["changes"]
-
-
 @pytest.mark.parametrize("func", ("enabled", "disabled"))
 @pytest.mark.parametrize("err", ("is not installed", "something else went wrong"))
 def test_en_dis_abled_error_handling(err, func, snap_is_enabled_mock, testmode):
@@ -505,6 +488,70 @@ def test_en_dis_abled_validation(func, tgt, snap_enable_mock, snap_disable_mock)
     assert ret["result"] is False
     assert "but it is still" in ret["comment"]
     assert not ret["changes"]
+
+
+@pytest.mark.parametrize(
+    "name,channel,revision,held,changes",
+    (
+        ("hello-world", None, None, None, False),
+        (
+            "hello-world",
+            "latest/edge",
+            None,
+            True,
+            {"channel": {"old": "latest/stable", "new": "latest/edge"}},
+        ),
+        (
+            "hello-world",
+            None,
+            29,
+            False,
+            {"revision": {"old": "28", "new": "29"}, "held": {"old": True, "new": False}},
+        ),
+        (
+            "hello-world",
+            None,
+            "latest",
+            None,
+            {"revision": {"old": "28", "new": "29"}},
+        ),
+        (
+            "core",
+            None,
+            "latest",
+            None,
+            False,
+        ),
+        (
+            "new-snap",
+            None,
+            None,
+            None,
+            {"installed": "new-snap"},
+        ),
+        (
+            "core",
+            None,
+            "latest",
+            True,
+            {"held": {"old": False, "new": True}},
+        ),
+    ),
+)
+def test_installed(name, channel, revision, held, changes, testmode):
+    ret = snap.installed(name, channel=channel, revision=revision, held=held)
+    assert ret["result"] is not False
+    if changes:
+        assert (ret["result"] is None) is testmode
+        assert ret["changes"] == changes
+        if "installed" in changes:
+            assert "nstalled the snap" in ret["comment"]
+        else:
+            assert "odified the snap" in ret["comment"]
+        assert ("Would have" in ret["comment"]) is testmode
+    else:
+        assert ret["result"] is True
+        assert not ret["changes"]
 
 
 @pytest.mark.usefixtures("testmode")

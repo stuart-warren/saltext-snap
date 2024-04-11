@@ -4,9 +4,23 @@ import re
 import shlex
 
 import salt.utils.path
-import salt.utils.yaml
+import salt.utils.yamlloader
+import yaml
 from salt.exceptions import CommandExecutionError
 from salt.exceptions import SaltInvocationError
+
+try:
+    import requests
+    from urllib3.connection import HTTPConnection
+    from urllib3.connectionpool import HTTPConnectionPool
+    from urllib.parse import urlencode
+    from requests.adapters import HTTPAdapter
+
+    HAS_REQUESTS = True
+    import socket
+except ImportError:
+    HAS_REQUESTS = False
+
 
 log = logging.getLogger(__name__)
 
@@ -19,6 +33,8 @@ LIST_RE = None
 SERVICE_RE = None
 
 RISK_LEVELS = ("stable", "candidate", "beta", "edge")
+CKEY = "_snapd_conn"
+LIST_VERBOSE_FILTER = ("contact", "description", "icon", "links", "media", "website")
 
 
 def __virtual__():
@@ -30,6 +46,8 @@ def __virtual__():
 def __init__(_):
     global LIST_RE
     global SERVICE_RE
+    # This regex is a best effort, but some special rows will not match,
+    # usually because of empty fields (in try mode, for example)
     LIST_RE = re.compile(
         r"^(?P<name>\S+)\s+(?P<version>\S+)\s+(?P<revision>\S+)\s+(?P<channel>\S+)\s+(?P<publisher>\S+)\s+(?P<notes>\S+)"
     )
@@ -81,18 +99,36 @@ def info(name, verbose=False):
     .. code-block:: bash
 
         salt '*' snap.info hello-world
+        salt '*' snap.info '[hello-world, core]'
 
     name
-        The name of the snap.
+        The name(s) of the snap(s).
 
     verbose
         Include more details on the snap.
     """
+    # Using the API here would require heavy modifications and
+    # two separate calls ( /find?name={name} and /snaps/{name})
+    # to get similar output to the CLI.
+    # A benefit would be rich channel and app/service information.
     cmd = ["snap", "info", "--unicode=never", "--color=never"]
     if verbose:
         cmd.append("--verbose")
-    cmd.append(name)
-    return salt.utils.yaml.load(_run(cmd))
+    if not isinstance(name, list):
+        name = [name]
+    cmd.extend(name)
+    ret = {}
+    for nam, snap in zip(
+        name, list(yaml.load_all(_run(cmd), Loader=salt.utils.yaml.SaltYamlSafeLoader))
+    ):
+        if "warning" in snap:
+            log.warning(snap["warning"])
+            snap = {}
+
+        ret[nam] = snap
+    if len(ret) == 1:
+        return ret[next(iter(ret))]
+    return ret
 
 
 def install(name, channel=None, revision=None, classic=False, refresh=False):
@@ -170,7 +206,7 @@ def is_enabled(name):
     snapinfo = list_(name)
     if not snapinfo:
         raise CommandExecutionError(f'snap "{name}" is not installed')
-    return "disabled" not in snapinfo[name]["notes"]
+    return snapinfo[name]["enabled"]
 
 
 def is_installed(name):
@@ -210,7 +246,7 @@ def is_uptodate(name=None):
     return name not in list_upgrades()
 
 
-def list_(name=None, revisions=False):
+def list_(name=None, revisions=False, verbose=False):
     """
     List all installed snaps.
 
@@ -220,25 +256,23 @@ def list_(name=None, revisions=False):
 
         salt '*' snap.list
         salt '*' snap.list hello-world
+        salt '*' snap.list '[hello-world, core]'
 
     name
-        Filter for the name of this snap. Optional.
+        Filter for the name(s) of specified snap(s). Optional.
 
     revisions
         List all revisions. Defaults to false.
+
+    verbose
+        List more detailed information. This requires being able to query the
+        REST API (``requests`` lib). Defaults to false
     """
-    cmd = ["snap", "list", "--unicode=never", "--color=never"]
-    if revisions:
-        # Not sure if the data structure as it is currently works here
-        cmd.append("--all")
-    if name:
-        cmd.append(name)
-    try:
-        return _parse_list(_run(cmd, ignore_retcode=bool(name)))
-    except CommandExecutionError as err:
-        if name and "no matching snaps installed" in str(err):
-            return {}
-        raise
+    if HAS_REQUESTS:
+        return _list_api(name, revisions, verbose=verbose)
+    if verbose:
+        raise CommandExecutionError("Cannot query REST API, missing `requests` library.")
+    return _list_cli(name, revisions)
 
 
 def list_upgrades():
@@ -570,19 +604,25 @@ def upgrade_all():
     return True
 
 
-def _parse_list(data, regex=None):
+def _parse_list(data, regex=None, duplicate=False):
     regex = regex or LIST_RE  # since it's initialized late
     ret = {}
     for line in data.splitlines()[1:]:
         match = regex.match(line)
-        if match:
-            parsed = match.groupdict()
-            notes = parsed.pop("notes", "")
-            if notes == "-":
-                notes = []
-            else:
-                notes = notes.split(",")
-            parsed["notes"] = notes
+        if not match:
+            continue
+        parsed = match.groupdict()
+        notes = parsed.pop("notes", "")
+        if notes == "-":
+            notes = []
+        else:
+            notes = notes.split(",")
+        parsed["notes"] = notes
+        if duplicate:
+            if parsed["name"] not in ret:
+                ret[parsed["name"]] = []
+            ret[parsed["name"]].append(parsed)
+        else:
             ret[parsed["name"]] = parsed
     return ret
 
@@ -609,4 +649,164 @@ def _flatten_dict(data, prefix=""):
             ret.update(_flatten_dict(val, prefix=f"{prefix}{key}"))
             continue
         ret[f"{prefix}{key}"] = val
+    return ret
+
+
+# https://stackoverflow.com/a/59594889
+
+
+class SnapdConnection(HTTPConnection):
+    def __init__(self):
+        super().__init__("localhost")
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.connect("/run/snapd.socket")
+
+    def close(self):
+        self.sock.close()
+
+
+class SnapdConnectionPool(HTTPConnectionPool):
+    def __init__(self):
+        super().__init__("localhost")
+
+    def _new_conn(self):
+        return SnapdConnection()
+
+
+class SnapdAdapter(HTTPAdapter):
+    def get_connection(self, url, proxies=None):
+        return SnapdConnectionPool()
+
+
+class SnapdApi:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def get(self, path, query=None, **kwargs):
+        return self._check(self.conn.get(self._uri(path, query), **kwargs))
+
+    def post(self, path, query=None, **kwargs):
+        return self._check(self.conn.post(self._uri(path, query), **kwargs))
+
+    def patch(self, path, query=None, **kwargs):
+        return self._check(self.conn.patch(self._uri(path, query), **kwargs))
+
+    def delete(self, path, query=None, **kwargs):
+        return self._check(self.conn.delete(self._uri(path, query), **kwargs))
+
+    def _check(self, res):
+        data = res.json()
+        if data["status-code"] >= 400:
+            raise CommandExecutionError(f"{data['type']}: {data['result']['message']}")
+        return data["result"]
+
+    def _uri(self, path, query):
+        path = path.lstrip("/")
+        suffix = "?"
+        if query:
+            for param, val in query.items():
+                if isinstance(val, list):
+                    query[param] = ",".join(val)
+            suffix += urlencode(query)
+        return f"http://snapd/v2/{path}{suffix}"
+
+
+def _conn():
+    if CKEY not in __context__:
+        session = requests.Session()
+        session.mount("http://snapd/", SnapdAdapter())
+        __context__[CKEY] = SnapdApi(session)
+    return __context__[CKEY]
+
+
+def _list_api(name=None, revisions=False, verbose=False):
+    """
+    This is the preferred method of listing installed snaps,
+    but requires ``requests``.
+    """
+    query = {}
+    if name:
+        if not isinstance(name, list):
+            name = [name]
+        query["snaps"] = name
+    if revisions:
+        query["all"] = True
+    res = _conn().get("snaps", query)
+    ret = {}
+    for snap in res:
+        name = snap["name"]
+        if verbose:
+            parsed = {k: v for k, v in snap.items() if k not in LIST_VERBOSE_FILTER}
+        else:
+            parsed = {
+                "channel": snap["tracking-channel"],
+                "name": name,
+                "notes": [],
+                "publisher": snap["publisher"]["username"],
+                "revision": snap["revision"],
+                "version": snap["version"],
+                "devmode": snap["devmode"],
+            }
+            if snap["type"] == "base":
+                parsed["notes"].append("base")
+            if snap["confinement"] == "classic":  # ?
+                parsed["notes"].append("classic")
+            if snap["type"] == "os":
+                parsed["notes"].append("core")
+            if snap["devmode"]:
+                parsed["notes"].append("devmode")
+            if snap["status"] == "installed":
+                parsed["notes"].append("disabled")
+            if snap["publisher"]["validation"] == "verified":
+                parsed["publisher"] += "**"
+        parsed["enabled"] = snap["status"] == "active"
+        parsed["classic"] = snap["confinement"] == "classic"
+        if name not in ret and revisions:
+            ret[name] = []
+        if revisions:
+            ret[name].append(parsed)
+            continue
+        # We don't need to account for multiple revisions being listed
+        # since the API has the same parameter as the CLI
+        ret[name] = parsed
+
+    return ret
+
+
+def _list_cli(name=None, revisions=False):
+    """
+    Fallback for listing snaps via CLI.
+
+    This has some issues since
+      * the tracking channel's branch is cropped
+      * some rows have empty fields (try mode, for example)
+    """
+    # It could mostly be fixed by only listing the names and then
+    # running those through snap info --verbose though.
+    def _amend(data):
+        data["enabled"] = "disabled" not in data["notes"]
+        data["classic"] = "classic" in data["notes"]
+        data["devmode"] = "devmode" in data["notes"]
+
+    cmd = ["snap", "list", "--unicode=never", "--color=never"]
+    if revisions:
+        cmd.append("--all")
+    if name:
+        if not isinstance(name, list):
+            name = [name]
+        cmd.extend(name)
+    try:
+        ret = _parse_list(_run(cmd, ignore_retcode=bool(name)), duplicate=revisions)
+    except CommandExecutionError as err:
+        if name and "no matching snaps installed" in str(err):
+            return {}
+        raise
+    for info in ret.values():
+        if revisions:
+            for rev in info:
+                _amend(rev)
+        else:
+            _amend(info)
     return ret

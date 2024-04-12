@@ -1,4 +1,6 @@
 import os
+from datetime import datetime
+from datetime import timezone
 
 import pytest
 import salt.config
@@ -149,6 +151,18 @@ def snap_list():
             "enabled": True,
             "held": False,
         },
+        "bw": {
+            "name": "bw",
+            "version": "2024.3.1",
+            "revision": "60",
+            "channel": None,
+            "publisher": "bitwarden**",
+            "notes": [],
+            "classic": False,
+            "devmode": False,
+            "enabled": True,
+            "held": False,
+        },
     }
 
 
@@ -255,3 +269,74 @@ def snap_info_verbose():
         "tracking": "latest/stable",
         "refresh-date": "today at 12:15 UTC",
     }
+
+
+@pytest.fixture
+def snap_info_file():
+    return {
+        "path": "/root/tmp/bw_60.snap",
+        "name": "bw",
+        "summary": "Bitwarden CLI - A secure and free password manager for all of your devices.",
+        "version": "2024.3.1 -",
+        "build-date": "4 days ago, at 14:01 CEST",
+        "license": "unset",
+        "description": "Bitwarden, Inc. is the parent company of 8bit Solutions LLC.\n\nNAMED BEST PASSWORD MANAGER BY THE VERGE, U.S. NEWS &amp; WORLD REPORT,\nCNET, AND MORE.\n\nManage, store, secure, and share unlimited passwords across unlimited\ndevices from anywhere. Bitwarden delivers open source password management\nsolutions to everyone, whether at  home, at work, or on the go.\n\nGenerate strong, unique, and random passwords based on security\nrequirements for every website you frequent.\n\nBitwarden Send quickly transmits encrypted information --- files and\nplaintext -- directly to anyone.\n\nBitwarden offers Teams and Enterprise plans for companies so you can\nsecurely share passwords with colleagues.\n\nWhy Choose Bitwarden:\n\nWorld-Class Encryption\nPasswords are protected with advanced end-to-end encryption (AES-256 bit,\nsalted hashing, and PBKDF2 SHA-256) so your data stays secure and private.\n\nBuilt-in Password Generator\nGenerate strong, unique, and random passwords based on security\nrequirements for every website you frequent.\n\nGlobal Translations\nBitwarden translations exist in 40 languages and are growing, thanks to our\nglobal community.\n\nCross-Platform Applications\nSecure and share sensitive data within your Bitwarden Vault from any\nbrowser, mobile device, or desktop OS, and more.\n",
+        "commands": ["bw"],
+        "notes": {"private": False, "confinement": "strict"},
+        "base": "core22",
+        "sha3-384": "rCj3QCM0PMpsn4FiyOqBpUBtjbU_PLGrTOcr96Q9jTKjV96NSRDpW9lZIpmrsSJU",
+    }
+
+
+@pytest.fixture
+def snap_known():
+    return [
+        {
+            "type": "snap-revision",
+            "authority-id": "canonical",
+            "snap-sha3-384": "AH7zvZLOXzHcp3gxaWTmGUOrmsXYJmACXFiCBoydL-H1PlC9G43rGAJs3WiyzOb_",
+            "developer-id": "GKq9csPRQp1E5kUglZG9QTqDEBLrcszO",
+            "provenance": "global-upload",
+            "snap-id": "JUJH91Ved74jd4ZgJCpzMBtYbPOzTlsD",
+            "snap-revision": 142,
+            "snap-size": 123101184,
+            "timestamp": datetime(2024, 4, 3, 17, 49, 48, 613165, tzinfo=timezone.utc),
+            "sign-key-sha3-384": "BWDEoaqyr25nF5SNCvEv2v7QnM9QsfCc0PBMYD_i2NGSQ32EF2d4D0hqUel3m8ul",
+        },
+        {
+            "type": "snap-revision",
+            "authority-id": "canonical",
+            "snap-sha3-384": "tZ4sZcgQR8QSIdneZKmUj44OXwnVm_64iWwPmwh_3Jfi5eGCRyDYEnfrAcIsX2D_",
+            "developer-id": "canonical",
+            "provenance": "global-upload",
+            "snap-id": "TIM9dBBJEceEjMpwaB3fiuZ3AdSykgDO",
+            "snap-revision": 93,
+            "snap-size": 228999168,
+            "timestamp": datetime(2023, 4, 24, 16, 34, 37, 479211, tzinfo=timezone.utc),
+            "sign-key-sha3-384": "BWDEoaqyr25nF5SNCvEv2v7QnM9QsfCc0PBMYD_i2NGSQ32EF2d4D0hqUel3m8ul",
+        },
+        {
+            "type": "snap-revision",
+            "authority-id": "canonical",
+            "snap-sha3-384": "rCj3QCM0PMpsn4FiyOqBpUBtjbU_PLGrTOcr96Q9jTKjV96NSRDpW9lZIpmrsSJU",
+            "developer-id": "SflUpHyJuL9BkjUnFAgINhCW9QjI5tow",
+            "provenance": "global-upload",
+            "snap-id": "n0XNnJXxSdYYHRYwtfYV2mBSkzH1Fbkn",
+            "snap-revision": 60,
+            "snap-size": 28114944,
+            "timestamp": datetime(2024, 4, 8, 12, 46, 12, 441719, tzinfo=timezone.utc),
+            "sign-key-sha3-384": "BWDEoaqyr25nF5SNCvEv2v7QnM9QsfCc0PBMYD_i2NGSQ32EF2d4D0hqUel3m8ul",
+        },
+        {
+            "type": "snap-revision",
+            "authority-id": "canonical",
+            "snap-sha3-384": "7uNHCak9aSwcICRfP1YmJNGrRqROw45Ihj1aFx7S74MUfXYedKyZQzbjkJC2CCYd",
+            "developer-id": "canonical",
+            "provenance": "global-upload",
+            "snap-id": "amcUKQILKXHHTlmSa7NMdnXSx02dNeeT",
+            "snap-revision": 1122,
+            "snap-size": 77819904,
+            "timestamp": datetime(2024, 1, 11, 16, 31, 37, 728357, tzinfo=timezone.utc),
+            "sign-key-sha3-384": "BWDEoaqyr25nF5SNCvEv2v7QnM9QsfCc0PBMYD_i2NGSQ32EF2d4D0hqUel3m8ul",
+        },
+    ]

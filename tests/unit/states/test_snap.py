@@ -212,6 +212,21 @@ def snap_option_unset_mock(snap_options):
 
 
 @pytest.fixture
+def snap_ack_mock():
+    return Mock(spec=snap_module.ack, return_value=True)
+
+
+@pytest.fixture
+def snap_known_mock(snap_known):
+    return Mock(spec=snap_module.known, return_value=[snap_known[-2]])
+
+
+@pytest.fixture
+def snap_info_mock(snap_info_file):
+    return Mock(spec=snap_module.info, return_value=snap_info_file)
+
+
+@pytest.fixture
 def configure_loader_modules(
     testmode,
     snap_list_mock,
@@ -233,6 +248,9 @@ def configure_loader_modules(
     snap_options_mock,
     snap_option_set_mock,
     snap_option_unset_mock,
+    snap_known_mock,
+    snap_ack_mock,
+    snap_info_mock,
 ):
     return {
         snap: {
@@ -256,6 +274,9 @@ def configure_loader_modules(
                 "snap.options": snap_options_mock,
                 "snap.option_set": snap_option_set_mock,
                 "snap.option_unset": snap_option_unset_mock,
+                "snap.known": snap_known_mock,
+                "snap.ack": snap_ack_mock,
+                "snap.info": snap_info_mock,
             },
             "__opts__": {
                 "test": testmode,
@@ -538,7 +559,17 @@ def test_en_dis_abled_validation(func, tgt, snap_enable_mock, snap_disable_mock)
         ),
     ),
 )
-def test_installed(name, channel, revision, held, changes, testmode):
+def test_installed(
+    name,
+    channel,
+    revision,
+    held,
+    changes,
+    snap_install_mock,
+    snap_hold_mock,
+    snap_unhold_mock,
+    testmode,
+):
     ret = snap.installed(name, channel=channel, revision=revision, held=held)
     assert ret["result"] is not False
     if changes:
@@ -549,9 +580,133 @@ def test_installed(name, channel, revision, held, changes, testmode):
         else:
             assert "odified the snap" in ret["comment"]
         assert ("Would have" in ret["comment"]) is testmode
+        if tuple(changes) != ("held",):
+            assert bool(snap_install_mock.call_count) is not (testmode)
+        else:
+            snap_install_mock.assert_not_called()
+        if "held" in changes and not testmode:
+            if changes["held"]["new"]:
+                snap_hold_mock.assert_called_once_with(name)
+            else:
+                snap_unhold_mock.assert_called_once_with(name)
+        else:
+            snap_hold_mock.assert_not_called()
+            snap_unhold_mock.assert_not_called()
+
     else:
         assert ret["result"] is True
         assert not ret["changes"]
+        snap_install_mock.assert_not_called()
+        snap_hold_mock.assert_not_called()
+        snap_unhold_mock.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "name,changes,asserts_imported",
+    (
+        ("/tmp/bw_60.snap", False, True),
+        ("/tmp/bw_61.snap", {"revision": {"old": "60", "new": "61"}}, True),
+        ("/tmp/bw2_60.snap", {"installed": "/tmp/bw2_60.snap"}, True),
+        ("/tmp/bw2_60.snap", {"installed": "/tmp/bw2_60.snap"}, False),
+    ),
+)
+def test_installed_with_file(
+    name,
+    changes,
+    asserts_imported,
+    snap_info_mock,
+    snap_known_mock,
+    snap_install_mock,
+    snap_list_mock,
+    snap_ack_mock,
+    snap_info_file,
+    snap_list,
+    testmode,
+):
+    def _reinstall(*args, **kwargs):
+        snap_list["bw"]["revision"] = "61"
+
+    def _install(*args, **kwargs):
+        snap_list["bw2"] = snap_list["bw"].copy()
+
+    if changes:
+        if "revision" in changes:
+            snap_known_mock.return_value[0]["snap-revision"] = 61
+            snap_install_mock.side_effect = _reinstall
+        elif "installed" in changes:
+            snap_info_file["name"] = "bw2"
+            snap_install_mock.side_effect = _install
+            if not asserts_imported:
+                snap_known_mock.side_effect = ([], snap_known_mock.return_value)
+
+    snap_info_mock.return_value = snap_info_file
+    with patch("pathlib.Path.exists", return_value=True):
+        ret = snap.installed(name, assertions="/tmp/bw2_60.assert")
+    assert ret["result"] is not False
+    exp_name = "bw2" if changes and "installed" in changes else "bw"
+    if changes:
+        assert (ret["result"] is None) is testmode
+        assert ret["changes"] == changes
+        if "installed" in changes:
+            assert "nstalled the snap" in ret["comment"]
+        else:
+            assert "odified the snap" in ret["comment"]
+        assert ("Would have" in ret["comment"]) is testmode
+        assert bool(snap_install_mock.call_count) is not testmode
+    else:
+        assert ret["result"] is True
+        assert not ret["changes"]
+        snap_install_mock.assert_not_called()
+    if asserts_imported or testmode:
+        snap_known_mock.assert_called_once()
+    else:
+        assert snap_known_mock.call_count == 2
+    if asserts_imported or not testmode:
+        snap_list_mock.assert_called_with(
+            exp_name
+        )  # ensure listing uses the snap name, not the path
+    assert snap_known_mock.call_args[0] == ("snap-revision",)
+    assert snap_known_mock.call_args[1] == {"snap-sha3-384": snap_info_file["sha3-384"]}
+    if asserts_imported or testmode:
+        snap_ack_mock.assert_not_called()
+    else:
+        snap_ack_mock.assert_called_once_with("/tmp/bw2_60.assert")
+
+
+@pytest.mark.usefixtures("testmode")
+def test_installed_with_file_requires_absolute_path():
+    ret = snap.installed("tmp/bw_60.snap")
+    assert ret["result"] is False
+    assert "not absolute" in ret["comment"]
+
+
+def test_installed_with_file_checks_path_exists(testmode):
+    ret = snap.installed("/tmp/bw_60.snap")
+    assert (ret["result"] is False) is not testmode
+    assert (ret["result"] is None) is testmode
+    assert "does not exist" in ret["comment"]
+    assert ("would be an error" in ret["comment"]) is testmode
+
+
+@pytest.mark.parametrize(
+    "assertions,testmode",
+    ((None, False), (None, True), ("/tmp/bw_60.snap", False)),
+    indirect=("testmode",),
+)
+def test_installed_with_file_requires_assertions(
+    assertions, snap_known_mock, snap_ack_mock, testmode
+):
+    snap_known_mock.return_value = []
+    with patch("pathlib.Path.exists", return_value=True):
+        ret = snap.installed("/tmp/bw_60.snap", assertions=assertions)
+    assert (ret["result"] is False) is not testmode
+    assert (ret["result"] is None) is testmode
+    if not assertions:
+        assert "Missing assertions" in ret["comment"]
+        assert ("would be an error" in ret["comment"]) is testmode
+    else:
+        snap_ack_mock.assert_called_once()
+        assert "still could not find" in ret["comment"]
 
 
 @pytest.mark.usefixtures("testmode")

@@ -55,6 +55,24 @@ def __init__(_):
     SERVICE_RE = re.compile(r"^(?P<name>\S+)\s+(?P<startup>\S+)\s+(?P<status>\S+)\s+(?P<notes>\S+)")
 
 
+def ack(path):
+    """
+    Check and import assertions from a file.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' snap.ack $(pwd)/hello-world_29.assert
+
+    path
+        The path to the assertions file.
+    """
+    cmd = ["snap", "ack", path]
+    _run(cmd)
+    return True
+
+
 def disable(name):
     """
     Disable a snap.
@@ -187,7 +205,10 @@ def install(name, channel=None, revision=None, classic=False, refresh=False):
         salt '*' snap.install hello-world
 
     name
-        The name of the snap.
+        The name of the snap or a path to a local file.
+        If you're passing the path to a downloaded snap, ensure you
+        have imported the accompanying assertions before using
+        ``snap.ack``. The other parameters are irrelevant in that case.
 
     channel
         Follow this channel instead of stable.
@@ -311,6 +332,39 @@ def is_uptodate(name=None, exclude_held=False):
     if name is None:
         return not bool(list_upgrades(exclude_held=exclude_held))
     return name not in list_upgrades(exclude_held=exclude_held)
+
+
+def known(assert_type, **kwargs):
+    """
+    List known assertions.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' snap.known snap-revision snap-sha3-384=sHvbeOdiwuYCDHX6_JIFWzI6b42jq0Kjlj2lreOGq6Efd-PI-Rm4qiPzqlwGyET5
+
+    assert_type
+        The type of assertion to list.
+
+    kwargs
+        Filter returned assertions by header values, passed
+        as supplemental keyword arguments.
+    """
+    cmd = ["snap", "known", assert_type] + [
+        f"{header}={value}" for header, value in kwargs.items() if not header.startswith("_")
+    ]
+    out = _run(cmd)
+    ret = []
+    for assrt in out.split("\n\n")[0::2]:
+        try:
+            val = yaml.safe_load(assrt)
+        except ValueError as err:
+            log.error("Failed parsing assertion: %s", err, exc_info_on_loglevel=logging.DEBUG)
+        else:
+            if val:
+                ret.append(val)
+    return ret
 
 
 def list_(name=None, revisions=False, verbose=False):
@@ -814,7 +868,7 @@ def _list_api(name=None, revisions=False, verbose=False):
             parsed = {k: v for k, v in snap.items() if k not in LIST_VERBOSE_FILTER}
         else:
             parsed = {
-                "channel": snap["tracking-channel"],
+                "channel": snap.get("tracking-channel"),
                 "name": name,
                 "notes": [],
                 "publisher": snap["publisher"]["username"],
@@ -883,6 +937,9 @@ def _list_cli(name=None, revisions=False):
         data["classic"] = "classic" in data["notes"]
         data["devmode"] = "devmode" in data["notes"]
         data["held"] = "held" in data["notes"]
+        if data["channel"] == "-":
+            # e.g. locally installed
+            data["channel"] = None
 
     cmd = ["snap", "list", "--unicode=never", "--color=never"]
     if revisions:

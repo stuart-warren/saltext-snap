@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from pathlib import Path
 
 from salt.defaults import NOT_SET
 from salt.exceptions import CommandExecutionError
@@ -94,12 +95,17 @@ def disabled(name):
     return ret
 
 
-def installed(name, channel="latest/stable", revision=None, classic=False, held=None):
+def installed(
+    name, channel="latest/stable", revision=None, classic=False, held=None, assertions=None
+):
     """
     Ensure a snap is installed.
 
     name
-        The name of the snap.
+        The name of the snap or a path to a local ``.snap`` file.
+        In the latter case, ensure you also possess the accompanying
+        assertions and specify the ``assertions`` parameter or import
+        them in some other way before this state runs.
 
     channel
         Follow this channel instead of ``latest/stable``.
@@ -117,23 +123,28 @@ def installed(name, channel="latest/stable", revision=None, classic=False, held=
     held
         Whether the snap should be excluded from general refreshes.
         Optional. If unset, leaves the setting unmanaged.
+
+    assertions
+        When installing a snap from a file, import accompanying assertions
+        from this file. Optional (if the assertions are imported otherwise).
     """
 
-    def _check_changes(curr):
+    def _check_changes(curr, isfile):
         nonlocal revision
         changes = {}
-        if channel and curr["channel"] != channel:
-            changes["channel"] = {"old": curr["channel"], "new": channel}
-        if revision == "latest":
-            upgrades = __salt__["snap.list_upgrades"]()
-            if name in upgrades:
-                revision = upgrades[name]["revision"]
-            else:
-                revision = None
-        if revision and curr["revision"] != str(revision):
+        if not isfile:
+            if channel and curr["channel"] != channel:
+                changes["channel"] = {"old": curr["channel"], "new": channel}
+            if revision == "latest":
+                upgrades = __salt__["snap.list_upgrades"]()
+                if name in upgrades:
+                    revision = upgrades[name]["revision"]
+                else:
+                    revision = None
+            if held is not None and curr["held"] is not held:
+                changes["held"] = {"old": curr["held"], "new": held}
+        if revision is not None and curr["revision"] != str(revision):
             changes["revision"] = {"old": curr["revision"], "new": str(revision)}
-        if held is not None and curr["held"] is not held:
-            changes["held"] = {"old": curr["held"], "new": held}
         return changes
 
     ret = {
@@ -144,9 +155,47 @@ def installed(name, channel="latest/stable", revision=None, classic=False, held=
     }
 
     try:
-        curr = __salt__["snap.list"](name)
+        snap_name = name
+        isfile = name.endswith(".snap")  # this suffix is required by snap
+        if isfile:
+            path = Path(name)
+            if not path.is_absolute():
+                raise SaltInvocationError(f"Specified path '{name}' is not absolute")
+            if not path.exists():
+                msg = f"Specified path '{name}' does not exist"
+                if __opts__["test"]:
+                    ret["result"] = None
+                    ret["comment"] = f"{msg}. If we weren't testing, ths would be an error"
+                    return ret
+                raise SaltInvocationError(msg)
+            snapinfo = __salt__["snap.info"](name, verbose=True)
+            snap_name = snapinfo["name"]
+            match = {"snap-sha3-384": snapinfo["sha3-384"]}
+            curr_assrts = __salt__["snap.known"]("snap-revision", **match)
+            if not curr_assrts:
+                if __opts__["test"]:
+                    if assertions:
+                        msg = "Would have imported assertions and installed the snap"
+                        ret["changes"]["installed"] = name
+                    else:
+                        msg = "Missing assertions. If we weren't testing, this would be an error"
+                    ret["result"] = None
+                    ret["comment"] = msg
+                    return ret
+                if not assertions:
+                    raise CommandExecutionError(
+                        "Missing assertions, either import them or pass the assertions file in `assertions`"
+                    )
+                __salt__["snap.ack"](assertions)
+                curr_assrts = __salt__["snap.known"]("snap-revision", **match)
+                if not curr_assrts:
+                    raise CommandExecutionError(
+                        "Imported assertions, but still could not find snap-revision"
+                    )
+            revision = curr_assrts[0]["snap-revision"]
+        curr = __salt__["snap.list"](snap_name)
         if curr:
-            changes = _check_changes(curr[name])
+            changes = _check_changes(curr[snap_name], isfile)
             verb = "modified"
         else:
             changes = {"installed": name}
@@ -161,19 +210,23 @@ def installed(name, channel="latest/stable", revision=None, classic=False, held=
         held_change = changes.pop("held", None)
         if changes:
             __salt__["snap.install"](
-                name, channel=channel, revision=revision, classic=classic, refresh=bool(curr)
+                name,
+                channel=channel,
+                revision=revision if not isfile else None,
+                classic=classic,
+                refresh=bool(curr) and not isfile,
             )
             ret["changes"].update(changes)
         if held_change:
             func = "hold" if held else "unhold"
             __salt__[f"snap.{func}"](name)
             ret["changes"].update({"held": held_change})
-        new = __salt__["snap.list"](name)
+        new = __salt__["snap.list"](snap_name)
         if not new:
             raise CommandExecutionError(
                 f"{verb.capitalize()} the snap, but it could not be found afterwards"
             )
-        new_changes = _check_changes(new[name])
+        new_changes = _check_changes(new[snap_name], isfile)
         if new_changes:
             ret["result"] = False
             ret["comment"] = (

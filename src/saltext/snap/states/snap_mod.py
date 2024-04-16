@@ -27,6 +27,179 @@ def __virtual__():
         return False, "Did not find `snap` execution module"
 
 
+def connected(name, plug, target=None):
+    """
+    Ensure a snap's plug is connected.
+
+    name
+        The name of the snap to connect.
+
+    plug
+        The name of the snap's plug to connect.
+
+    target
+        A specification for the slot to connect to. Optional.
+        Full spec: ``<snap_name>:<slot_name>``.
+        If left unspecified, connects the plug to a slot of the
+        core snap with a name matching ``plug``.
+        If specified as a snap name only, connects the plug to
+        the only slot in the provided snap that matches the connection
+        interface, but fails if multiple potential slots exist.
+    """
+    ret = {
+        "name": name,
+        "result": True,
+        "comment": "The connection is already established",
+        "changes": {},
+    }
+    try:
+        if target is None:
+            target = f"core:{plug}"
+        elif ":" not in target:
+            try:
+                interface = __salt__["snap.plugs"](name)[plug]["interface"]
+            except KeyError as err:
+                raise SaltInvocationError(
+                    f"The snap '{name}' does not have a plug named '{plug}'"
+                ) from err
+            try:
+                possible_slots = __salt__["snap.slots"](target, interface=interface)
+            except CommandExecutionError as err:
+                if "is not installed" not in str(err) or not __opts__["test"]:
+                    raise
+                ret["result"] = None
+                ret["comment"] = str(err) + " - if we weren't testing, this would be an error"
+                return ret
+            if len(possible_slots) != 1:
+                raise SaltInvocationError(
+                    f"The target snap '{target}' does not expose exactly one slot with interface type '{interface}', but {len(possible_slots)}"
+                )
+            target = f"{target}:{next(iter(possible_slots))}"
+        try:
+            curr = __salt__["snap.connections"](name)
+        except CommandExecutionError as err:
+            if "is not installed" not in str(err) or not __opts__["test"]:
+                raise
+            ret["result"] = None
+            ret["comment"] = str(err) + " - if we weren't testing, this would be an error"
+            return ret
+        target_snap, target_slot = target.split(":", maxsplit=1)
+        for conn in curr["established"]:
+            if (
+                conn["plug"]["plug"] == plug
+                and conn["slot"]["snap"] == target_snap
+                and conn["slot"]["slot"] == target_slot
+            ):
+                return ret
+        if __opts__["test"]:
+            ret["result"] = None
+            ret[
+                "comment"
+            ] = f"Would have connected plug {name}:{plug} to slot {target_snap}:{target_slot}"
+            ret["changes"]["connected"] = f"{target_snap}:{target_slot}"
+            return ret
+        __salt__["snap.connect"](name, plug, target=target)
+        curr_new = __salt__["snap.connections"](name)
+        for conn in curr_new["established"]:
+            if (
+                conn["plug"]["plug"] == plug
+                and conn["slot"]["snap"] == target_snap
+                and conn["slot"]["slot"] == target_slot
+            ):
+                ret["comment"] = f"Connected plug {name}:{plug} to slot {target_snap}:{target_slot}"
+                ret["changes"]["connected"] = f"{target_snap}:{target_slot}"
+                return ret
+        raise CommandExecutionError("Tried to connect the plug, but the connection is not reported")
+    except (CommandExecutionError, SaltInvocationError) as err:
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+    return ret
+
+
+def disconnected(name, source, target=None):
+    """
+    Ensure a snap's plug(s)/slot(s) is/are connected.
+
+    name
+        The name of the snap.
+
+    source
+        The name of the snap's plug/slot to disconnect.
+
+    target
+        A specification for the slot/plug to disconnect from in the format
+        `<snap_name>:<slot_or_plug_name>``. Optional.
+        If left unspecified, disconnects all connections of the plug/slot.
+    """
+    ret = {"name": name, "result": True, "comment": "The connection is already cut", "changes": {}}
+    try:
+        try:
+            if __salt__["snap.plugs"](name, source):
+                typ = "slot"
+                this = "plug"
+            elif __salt__["snap.slots"](name, source):
+                typ = "plug"
+                this = "slot"
+            else:
+                raise SaltInvocationError(
+                    "The snap carries neither a slot nor a plug with this name"
+                )
+        except CommandExecutionError as err:
+            if "is not installed" not in str(err) or not __opts__["test"]:
+                raise
+            ret["result"] = None
+            ret["comment"] = str(err) + " - if we weren't testing, this would be an error"
+            return ret
+        curr = __salt__["snap.connections"](name)
+        disconnect = []
+        if target:
+            target_snap, target_entity = target.split(":", maxsplit=1)
+        for conn in curr["established"]:
+            if conn[this]["snap"] != name or conn[this][this] != source:
+                continue
+            if target and (conn[typ]["snap"] != target_snap or conn[typ][typ] != target_entity):
+                continue
+            disconnect.append((conn[typ]["snap"], conn[typ][typ]))
+        if not disconnect:
+            return ret
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = f"Would have disconnected some {typ}s"
+            ret["changes"]["disconnected"] = {
+                f"{typ}s": [f"{tgt}:{ent}" for tgt, ent in disconnect]
+            }
+            return ret
+        __salt__["snap.disconnect"](name, source, target=target)
+        curr_new = __salt__["snap.connections"](name)
+        still_present = []
+        for conn in curr_new["established"]:
+            if conn[this]["snap"] != name or conn[this][this] != source:
+                continue
+            if target and (conn[typ]["snap"] != target_snap or conn[typ][typ] != target_entity):
+                continue
+            still_present.append((conn[typ]["snap"], conn[typ][typ]))
+        actually_disconnected = [
+            f"{tgt}:{ent}" for tgt, ent in set(disconnect).difference(still_present)
+        ]
+        if actually_disconnected:
+            ret["changes"]["disconnected"] = {
+                f"{typ}s": [
+                    f"{tgt}:{ent}" for tgt, ent in set(disconnect).difference(still_present)
+                ]
+            }
+        if still_present:
+            ret["result"] = False
+            ret["comment"] = f"Tried to disconnect some {typ}s, but some connections remained"
+            return ret
+        ret["comment"] = f"Disconnected some {typ}s"
+    except (CommandExecutionError, SaltInvocationError) as err:
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+    return ret
+
+
 def enabled(name):
     """
     Ensure a snap is enabled.

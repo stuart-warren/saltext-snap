@@ -38,6 +38,11 @@ CKEY = "_snapd_conn"
 LIST_VERBOSE_FILTER = ("contact", "description", "icon", "links", "media", "website")
 
 
+class SnapNotFound(CommandExecutionError):
+    def __init__(self, name):
+        super().__init__(f'snap "{name}" is not installed')
+
+
 def __virtual__():
     if salt.utils.path.which("snap"):
         return __virtualname__
@@ -69,6 +74,222 @@ def ack(path):
         The path to the assertions file.
     """
     cmd = ["snap", "ack", path]
+    _run(cmd)
+    return True
+
+
+def api(endpoint, method="get", **query):
+    """
+    Query the Snapd REST API directly.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' snap.api connections select=all
+
+    endpoint
+        The API endpoint, without ``/v2/`` prefix.
+
+    method
+        The API method to use. Defaults to ``get``.
+
+    Query parameters can be passed as supplemental keyword arguments.
+    """
+    return getattr(_conn(), method.lower())(
+        endpoint, {k: v for k, v in query.items() if not k.startswith("_")}
+    )
+
+
+def connect(name, plug, target=None, wait=True):
+    """
+    Connect a plug to a slot.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' snap.connect bitwarden password-manager-service
+
+    name
+        The name of the snap to connect.
+
+    plug
+        The name of the snap's plug to connect.
+
+    target
+        A specification for the slot to connect to. Optional.
+        Full spec: ``<snap_name>:<slot_name>``.
+        If left unspecified, connects the plug to a slot of the
+        core snap with a name matching ``plug``.
+        If specified as a snap name only, connects the plug to
+        the only slot in the provided snap that matches the connection
+        interface, but fails if multiple potential slots exist.
+
+    wait
+        Wait for the operation to complete. Defaults to true.
+    """
+    cmd = ["snap", "connect"]
+    if not wait:
+        cmd.append("--no-wait")
+    cmd.append(f"{name}:{plug}")
+    if target is not None:
+        cmd.append(target)
+    _run(cmd)
+    return True
+
+
+def connections(name=None, interface=None, all=False):
+    """
+    List interface connection information.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' snap.connections
+        salt '*' snap.connections bw
+        salt '*' snap.connections interface=network-bind
+
+    name
+        Only show connections involving this single snap. Optional.
+        When this is specified, only connected plugs and slots are
+        returned, regardless of ``all``. This is an API limitation.
+
+    interface
+        Only show connections involving this interface. Optional.
+
+    all
+        When ``name`` is unspecified, include unconnected plugs/slots
+        in the output. When a name is specified, this is done automatically.
+        Defaults to false.
+    """
+    query = {"attrs": True}
+    if name:
+        query["snap"] = name
+    elif all:
+        query["select"] = "all"
+    if interface:
+        query["interface"] = interface
+    return _conn().get("connections", query)
+
+
+def _filter_conn_points(typ, name, entity, interface, connected):
+    # Filtering by name only lists connected ones, hence we need
+    # to do it here.
+    data = connections(None, interface=interface, all=True)
+    ret = {}
+    for conn in data[f"{typ}s"]:
+        if conn["snap"] != name:
+            continue
+        if entity is not None and conn[typ] != entity:
+            continue
+        if connected is not None:
+            if connected is not bool(conn.get("connections")):
+                continue
+        if interface is not None:
+            if conn["interface"] != interface:
+                continue
+        ret[conn[typ]] = {
+            "interface": conn["interface"],
+            "connections": conn.get("connections", []),
+            "snap": conn["snap"],
+            "attrs": conn.get("attrs", {}),
+        }
+    return ret
+
+
+def plugs(name, plug=None, interface=None, connected=None):
+    """
+    List plugs a snap exposes.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' snap.plugs bitwarden
+
+    name
+        The name of the snap.
+
+    plug
+        Only return information about a plug with this name. Optional.
+
+    interface
+        Only return information about a plug with this interface. Optional.
+
+    connected
+        Filter by connection status. Optional. Set this to true to only show
+        connected plugs, set this to false to only show unconnected ones.
+    """
+    return _filter_conn_points("plug", name, plug, interface, connected)
+
+
+def slots(name, slot=None, interface=None, connected=None):
+    """
+    List slots a snap exposes.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' snap.slots core
+
+    name
+        The name of the snap.
+
+    slot
+        Only return information about a slot with this name. Optional.
+
+    interface
+        Only return information about a slot with this interface. Optional.
+
+    connected
+        Filter by connection status. Optional. Set this to true to only show
+        connected slots, set this to false to only show unconnected ones.
+    """
+    return _filter_conn_points("slot", name, slot, interface, connected)
+
+
+def disconnect(name, source, target=None, forget=False, wait=True):
+    """
+    Disconnect a plug's/slot's connections.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' snap.disconnect bitwarden password-manager-service
+
+    name
+        The name of the snap to disconnect.
+        The ``core`` snap must be spelled out as well.
+
+    source
+        The name of the snap's plug/slot to disconnect.
+
+    target
+        A specification for the slot/plug to disconnect from in the format
+        `<snap_name>:<slot_or_plug_name>``. Optional.
+        If left unspecified, disconnects all connections of the plug/slot.
+
+    forget
+        When an automatic connection has been disconnected manually, its state
+        will be remembered, even after a snap refresh. Set this to true to
+        reset the connection's state, thus making it autoconnect again after
+        a snap refresh. Defaults to false.
+
+    wait
+        Wait for the operation to complete. Defaults to true.
+    """
+    cmd = ["snap", "disconnect"]
+    if not wait:
+        cmd.append("--no-wait")
+    if forget:
+        cmd.append("--forget")
+    cmd.append(f"{name}:{source}")
+    if target is not None:
+        cmd.append(target)
     _run(cmd)
     return True
 
@@ -194,6 +415,49 @@ def info(name, verbose=False):
     return ret
 
 
+def interfaces(name=None, all=False):
+    """
+    Query interface types.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' snap.interfaces
+        salt '*' snap.interfaces network
+        salt '*' snap.interfaces '[network, network-bind]'
+        salt '*' snap.interfaces x11 all=true
+
+    name
+        Filter by interface name(s). Optional.
+
+    all
+        By default, this only lists interfaces with active
+        connections. Set this to true to also list those without.
+    """
+    query = {"plugs": True, "slots": True}
+    if name:
+        if not isinstance(name, list):
+            name = [name]
+        query["names"] = name
+    if all:
+        query["select"] = "all"
+    else:
+        # not specifying this parameter results in legacy output
+        query["select"] = "connected"
+    ret = {}
+    for interface in _conn().get("interfaces", query):
+        ret[interface["name"]] = {
+            "name": interface["name"],
+            "summary": interface["summary"],
+            "plugs": interface.get("plugs", []),
+            "slots": interface.get("slots", []),
+        }
+    if len(ret) == 1:
+        return ret[next(iter(ret))]
+    return ret
+
+
 def install(name, channel=None, revision=None, classic=False, refresh=False):
     """
     Install a snap.
@@ -271,7 +535,7 @@ def is_enabled(name):
     """
     snapinfo = list_(name)
     if not snapinfo:
-        raise CommandExecutionError(f'snap "{name}" is not installed')
+        raise SnapNotFound(name)
     return snapinfo[name]["enabled"]
 
 
@@ -290,7 +554,7 @@ def is_held(name):
     """
     snapinfo = list_(name)
     if not snapinfo:
-        raise CommandExecutionError(f'snap "{name}" is not installed')
+        raise SnapNotFound(name)
     return snapinfo[name]["held"]
 
 
@@ -328,7 +592,7 @@ def is_uptodate(name=None, exclude_held=False):
         Count held snaps as up to date. Defaults to False.
     """
     if name and not is_installed(name):
-        raise CommandExecutionError(f'snap "{name}" is not installed')
+        raise SnapNotFound(name)
     if name is None:
         return not bool(list_upgrades(exclude_held=exclude_held))
     return name not in list_upgrades(exclude_held=exclude_held)
@@ -440,7 +704,7 @@ def options(name, option=None):
     """
     if not is_installed(name):
         # it happily returns an empty dict in this case
-        raise CommandExecutionError(f'snap "{name}" is not installed')
+        raise SnapNotFound(name)
     cmd = ["snap", "get", "-d", name]
     if option:
         cmd.append(option)
@@ -815,27 +1079,31 @@ class SnapdApi:
         return self._check(self.conn.get(self._uri(path, query), **kwargs))
 
     def post(self, path, query=None, **kwargs):
-        return self._check(self.conn.post(self._uri(path, query), **kwargs))
+        return self._check(self.conn.post(self._uri(path), **kwargs, json=query))
 
     def patch(self, path, query=None, **kwargs):
-        return self._check(self.conn.patch(self._uri(path, query), **kwargs))
+        return self._check(self.conn.patch(self._uri(path), **kwargs, json=query))
 
     def delete(self, path, query=None, **kwargs):
-        return self._check(self.conn.delete(self._uri(path, query), **kwargs))
+        return self._check(self.conn.delete(self._uri(path), **kwargs, json=query))
 
     def _check(self, res):
         data = res.json()
         if data["status-code"] >= 400:
+            if data["result"]["kind"] == "snap-not-found":
+                raise SnapNotFound(data["result"]["value"])
             raise CommandExecutionError(f"{data['type']}: {data['result']['message']}")
         return data["result"]
 
-    def _uri(self, path, query):
+    def _uri(self, path, query=None):
         path = path.lstrip("/")
         suffix = "?"
         if query:
             for param, val in query.items():
                 if isinstance(val, list):
                     query[param] = ",".join(val)
+                elif isinstance(val, bool):
+                    query[param] = str(val).lower()
             suffix += urlencode(query)
         return f"http://snapd/v2/{path}{suffix}"
 

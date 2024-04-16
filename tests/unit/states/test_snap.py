@@ -227,6 +227,184 @@ def snap_info_mock(snap_info_file):
 
 
 @pytest.fixture
+def snap_connections_mock(snap_connections_name, snap_connections_core):
+    def _connections(name=None, **kwargs):
+        if name == "core":
+            return snap_connections_core
+        return snap_connections_name
+
+    return Mock(spec=snap_module.connections, side_effect=_connections)
+
+
+@pytest.fixture
+def snap_plugs_mock(snap_plugs):
+    def _plugs(name, plug=None, interface=None, **kwargs):
+        if name != "bitwarden":
+            return {}
+        if plug is not None:
+            if plug in snap_plugs:
+                return {plug: snap_plugs[plug]}
+            return {}
+        if interface is not None:
+            for slot, data in snap_plugs.items():
+                if data["interface"] == interface:
+                    return {slot: data}
+            return {}
+        return snap_plugs
+
+    return Mock(spec=snap_module.plugs, side_effect=_plugs)
+
+
+@pytest.fixture
+def snap_slots_mock(snap_slots):
+    def _slots(name, slot=None, interface=None, **kwargs):
+        if name != "core":
+            return {}
+        ret = snap_slots
+        if interface is not None:
+            ret = {k: v for k, v in snap_slots.items() if v["interface"] == interface}
+        if slot is not None:
+            if slot in ret:
+                return {slot: ret[slot]}
+            return {}
+        return ret
+
+    return Mock(spec=snap_module.slots, side_effect=_slots)
+
+
+@pytest.fixture
+def snap_connect_mock(snap_connections_name, snap_plugs, snap_slots):
+    def _connect(name, plug, *args, **kwargs):
+        snap_slots[plug]["connections"].append({"snap": name, "plug": plug})
+        snap_plugs[plug]["connections"].append({"snap": "core", "slot": plug})
+        snap_connections_name["established"].append(
+            {
+                "slot": {"snap": "core", "slot": plug},
+                "plug": {"snap": name, "plug": plug},
+                "interface": plug,
+            }
+        )
+        snap_connections_name["plugs"].append(
+            {
+                "snap": name,
+                "plug": plug,
+                "interface": plug,
+                "apps": [name],
+                "connections": [{"snap": "core", "slot": plug}],
+            }
+        )
+        snap_connections_name["slots"].append(
+            {
+                "snap": "core",
+                "plug": plug,
+                "interface": plug,
+                "apps": [name],
+                "connections": [{"snap": name, "plug": plug}],
+            }
+        )
+        return True
+
+    return Mock(spec=snap_module.connect, side_effect=_connect)
+
+
+@pytest.fixture
+def snap_disconnect_mock(snap_connections_name, snap_connections_core, snap_plugs, snap_slots):
+    def _disconnect_plug(name, plug, **kwargs):
+        snap_slots[plug]["connections"].remove({"snap": name, "plug": plug})
+        snap_plugs[plug]["connections"].remove({"snap": "core", "slot": plug})
+        snap_connections_name["established"].remove(
+            {
+                "slot": {"snap": "core", "slot": plug},
+                "plug": {"snap": name, "plug": plug},
+                "interface": plug,
+            }
+        )
+        snap_connections_name["plugs"].remove(
+            {
+                "snap": name,
+                "plug": plug,
+                "interface": plug,
+                "apps": [name],
+                "connections": [{"snap": "core", "slot": plug}],
+            }
+        )
+        snap_connections_name["slots"].remove(
+            {
+                "snap": "core",
+                "slot": plug,
+                "interface": plug,
+                "connections": [{"snap": name, "plug": plug}],
+            }
+        )
+        return True
+
+    def _find_slot(slot):
+        return next(iter(x for x in snap_connections_core["slots"] if x["slot"] == slot))
+
+    def _disconnect_slot(name, slot, target=None, **kwargs):
+        if target is None:
+            targets = ["bitwarden", "bw"]
+        else:
+            targets = [target.split(":")[0]]
+        if "bitwarden" in targets:
+            snap_slots[slot]["connections"].remove({"snap": "bitwarden", "plug": slot})
+            snap_plugs[slot]["connections"].remove({"snap": "core", "slot": slot})
+            snap_connections_name["established"].remove(
+                {
+                    "slot": {"snap": "core", "slot": slot},
+                    "plug": {"snap": "bitwarden", "plug": slot},
+                    "interface": slot,
+                }
+            )
+            snap_connections_name["plugs"].remove(
+                {
+                    "snap": "bitwarden",
+                    "plug": slot,
+                    "interface": slot,
+                    "apps": ["bitwarden"],
+                    "connections": [{"snap": "core", "slot": slot}],
+                }
+            )
+            snap_connections_name["slots"].remove(
+                {
+                    "snap": "core",
+                    "slot": slot,
+                    "interface": slot,
+                    "connections": [{"snap": "bitwarden", "plug": slot}],
+                }
+            )
+        slot_inst = _find_slot(slot)
+        for tgt in targets:
+            snap_connections_core["established"].remove(
+                {
+                    "slot": {"snap": "core", "slot": slot},
+                    "plug": {"snap": tgt, "plug": slot},
+                    "interface": slot,
+                }
+            )
+            slot_inst["connections"].remove({"snap": tgt, "plug": slot})
+            snap_connections_core["plugs"].remove(
+                {
+                    "snap": tgt,
+                    "apps": [tgt],
+                    "plug": slot,
+                    "interface": slot,
+                    "connections": [{"snap": "core", "slot": slot}],
+                }
+            )
+        return True
+
+    def _disconnect(name, source, **kwargs):
+        if name == "core":
+            return _disconnect_slot(name, source, **kwargs)
+        if name == "bitwarden":
+            return _disconnect_plug(name, source, **kwargs)
+        raise RuntimeError("Undefined test behavior")
+
+    return Mock(spec=snap_module.disconnect, side_effect=_disconnect)
+
+
+@pytest.fixture
 def configure_loader_modules(
     testmode,
     snap_list_mock,
@@ -251,6 +429,11 @@ def configure_loader_modules(
     snap_known_mock,
     snap_ack_mock,
     snap_info_mock,
+    snap_connections_mock,
+    snap_plugs_mock,
+    snap_slots_mock,
+    snap_connect_mock,
+    snap_disconnect_mock,
 ):
     return {
         snap: {
@@ -277,6 +460,11 @@ def configure_loader_modules(
                 "snap.known": snap_known_mock,
                 "snap.ack": snap_ack_mock,
                 "snap.info": snap_info_mock,
+                "snap.connections": snap_connections_mock,
+                "snap.plugs": snap_plugs_mock,
+                "snap.slots": snap_slots_mock,
+                "snap.connect": snap_connect_mock,
+                "snap.disconnect": snap_disconnect_mock,
             },
             "__opts__": {
                 "test": testmode,
@@ -288,6 +476,167 @@ def configure_loader_modules(
 @pytest.fixture(params=(False, True))
 def testmode(request):
     return request.param
+
+
+@pytest.mark.parametrize(
+    "plug,target,changes",
+    (
+        ("network", None, False),
+        ("password-manager-service", None, "core:password-manager-service"),
+        (
+            "password-manager-service",
+            "core:password-manager-service",
+            "core:password-manager-service",
+        ),
+        ("password-manager-service", "core", "core:password-manager-service"),
+    ),
+)
+def test_connected(plug, target, changes, testmode):
+    ret = snap.connected("bitwarden", plug, target)
+    assert ret["result"] is not False
+    if changes:
+        assert (ret["result"] is None) is testmode
+        assert ret["changes"]["connected"] == changes
+        assert f"onnected plug bitwarden:{plug}" in ret["comment"]
+        assert ("Would have" in ret["comment"]) is testmode
+    else:
+        assert ret["result"] is True
+        assert not ret["changes"]
+
+
+@pytest.mark.parametrize("err", (snap_module.SnapNotFound, "something else went wrong"))
+def test_connected_error_handling(err, snap_connections_mock, testmode):
+    if isinstance(err, str):
+        err = CommandExecutionError(err)
+    else:
+        err = err("hello-world")
+    snap_connections_mock.side_effect = err
+    ret = snap.connected("bitwardenn", "network")
+    if isinstance(err, snap_module.SnapNotFound):
+        assert (ret["result"] is None) is testmode
+    else:
+        assert ret["result"] is False
+    assert str(err) in ret["comment"]
+    assert not ret["changes"]
+
+
+@pytest.mark.usefixtures("testmode")
+@pytest.mark.parametrize("testmode", (False,), indirect=True)
+def test_connected_validation(snap_connect_mock):
+    snap_connect_mock.side_effect = None
+    ret = snap.connected("bitwarden", "password-manager-service")
+    assert ret["result"] is False
+    assert "connection is not reported" in ret["comment"]
+    assert not ret["changes"]
+
+
+def test_connected_target_discovery_no_plug(snap_plugs_mock, testmode):
+    snap_plugs_mock.side_effect = None
+    snap_plugs_mock.return_value = {}
+    ret = snap.connected("bitwarden", "password-manager-service", "core")
+    assert ret["result"] is False
+    assert "does not have a plug named" in ret["comment"]
+    assert not ret["changes"]
+
+
+def test_connected_target_discovery_no_slot(snap_slots_mock, testmode):
+    snap_slots_mock.side_effect = None
+    snap_slots_mock.return_value = {}
+    ret = snap.connected("bitwarden", "password-manager-service", target="core")
+    assert ret["result"] is False
+    assert "does not expose exactly one slot with interface type" in ret["comment"]
+    assert not ret["changes"]
+
+
+def test_connected_target_discovery_multiple_slots(snap_slots_mock, testmode):
+    snap_slots_mock.side_effect = None
+    snap_slots_mock.return_value = {
+        "slot-a": {"interface": "password-manager-service"},
+        "slot-b": {},
+    }
+    ret = snap.connected("bitwarden", "password-manager-service", target="core")
+    assert ret["result"] is False
+    assert "does not expose exactly one slot with interface type" in ret["comment"]
+    assert not ret["changes"]
+
+
+@pytest.mark.parametrize("err", (snap_module.SnapNotFound, "something else went wrong"))
+def test_connected_target_discovery_error_handling(err, snap_slots_mock, testmode):
+    if isinstance(err, str):
+        err = CommandExecutionError(err)
+    else:
+        err = err("hello-world")
+    snap_slots_mock.side_effect = err
+    ret = snap.connected("bitwarden", "network", target="core")
+    if isinstance(err, snap_module.SnapNotFound):
+        assert (ret["result"] is None) is testmode
+    else:
+        assert ret["result"] is False
+    assert str(err) in ret["comment"]
+    assert not ret["changes"]
+
+
+@pytest.mark.parametrize(
+    "name,source,target,changes",
+    (
+        ("bitwarden", "password-manager-service", None, False),
+        ("bitwarden", "password-manager-service", "core:password-manager-service", False),
+        ("bitwarden", "network", None, {"slots": ["core:network"]}),
+        ("bitwarden", "network", "core:network", {"slots": ["core:network"]}),
+        ("bitwarden", "network", "foo:network", False),
+        ("core", "network", "bitwarden:network", {"plugs": ["bitwarden:network"]}),
+        ("core", "network", "foo:network", False),
+        ("core", "network", None, {"plugs": ["bitwarden:network", "bw:network"]}),
+    ),
+)
+def test_disconnected(name, source, target, changes, testmode):
+    ret = snap.disconnected(name, source, target=target)
+    assert ret["result"] is not False
+    if changes:
+        typ = next(iter(changes))[:-1]
+        assert (ret["result"] is None) is testmode
+        assert set(ret["changes"]["disconnected"][f"{typ}s"]) == set(changes[f"{typ}s"])
+        assert f"isconnected some {typ}s" in ret["comment"]
+        assert ("Would have" in ret["comment"]) is testmode
+    else:
+        assert ret["result"] is True
+        assert not ret["changes"]
+
+
+@pytest.mark.usefixtures("testmode")
+def test_disconnected_no_source(snap_plugs_mock, snap_slots_mock):
+    snap_plugs_mock.side_effect = snap_slots_mock.side_effect = None
+    snap_plugs_mock.return_value = snap_slots_mock.return_value = {}
+    ret = snap.disconnected("bitwarden", "foo")
+    assert ret["result"] is False
+    assert "carries neither a slot nor a plug" in ret["comment"]
+    assert not ret["changes"]
+
+
+@pytest.mark.parametrize("err", (snap_module.SnapNotFound, "something else went wrong"))
+def test_disconnected_error_handling(err, snap_plugs_mock, testmode):
+    if isinstance(err, str):
+        err = CommandExecutionError(err)
+    else:
+        err = err("bitwarden")
+    snap_plugs_mock.side_effect = err
+    ret = snap.disconnected("bitwarden", "network")
+    if isinstance(err, snap_module.SnapNotFound):
+        assert (ret["result"] is None) is testmode
+    else:
+        assert ret["result"] is False
+    assert str(err) in ret["comment"]
+    assert not ret["changes"]
+
+
+@pytest.mark.usefixtures("testmode")
+@pytest.mark.parametrize("testmode", (False,), indirect=True)
+def test_disconnected_validation(snap_disconnect_mock):
+    snap_disconnect_mock.side_effect = None
+    ret = snap.disconnected("bitwarden", "network")
+    assert ret["result"] is False
+    assert "some connections remained" in ret["comment"]
+    assert not ret["changes"]
 
 
 @pytest.mark.parametrize("name,changes", (("hello-world", False), ("core18", True)))
@@ -488,15 +837,19 @@ def test_service_dead_mod_watch_multi(testmode):
 
 
 @pytest.mark.parametrize("func", ("enabled", "disabled"))
-@pytest.mark.parametrize("err", ("is not installed", "something else went wrong"))
+@pytest.mark.parametrize("err", (snap_module.SnapNotFound, "something else went wrong"))
 def test_en_dis_abled_error_handling(err, func, snap_is_enabled_mock, testmode):
-    snap_is_enabled_mock.side_effect = CommandExecutionError(err)
+    if isinstance(err, str):
+        err = CommandExecutionError(err)
+    else:
+        err = err("hello-world")
+    snap_is_enabled_mock.side_effect = err
     ret = getattr(snap, func)("hello-world")
-    if err == "is not installed":
+    if isinstance(err, snap_module.SnapNotFound):
         assert (ret["result"] is None) is testmode
     else:
         assert ret["result"] is False
-    assert err in ret["comment"]
+    assert str(err) in ret["comment"]
     assert not ret["changes"]
 
 
@@ -882,15 +1235,19 @@ def test_option_managed_multi(options, changes, testmode):
         assert "correct state" in ret["comment"]
 
 
-@pytest.mark.parametrize("err", ("is not installed", "something else went wrong"))
+@pytest.mark.parametrize("err", (snap_module.SnapNotFound, "something else went wrong"))
 def test_option_managed_error_handling(err, snap_options_mock, testmode):
-    snap_options_mock.side_effect = CommandExecutionError(err)
+    if isinstance(err, str):
+        err = CommandExecutionError(err)
+    else:
+        err = err("hello-world")
+    snap_options_mock.side_effect = err
     ret = snap.option_managed("core", option="system.foo", value="bar")
-    if err == "is not installed":
+    if isinstance(err, snap_module.SnapNotFound):
         assert (ret["result"] is None) is testmode
     else:
         assert ret["result"] is False
-    assert err in ret["comment"]
+    assert str(err) in ret["comment"]
     assert not ret["changes"]
 
 

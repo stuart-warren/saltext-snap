@@ -101,7 +101,7 @@ def api(endpoint, method="get", **query):
     )
 
 
-def connect(name, plug, target=None, wait=True):
+def connect(name, connector, target=None, wait=True):
     """
     Connect a plug to a slot.
 
@@ -114,7 +114,7 @@ def connect(name, plug, target=None, wait=True):
     name
         The name of the snap to connect.
 
-    plug
+    connector
         The name of the snap's plug to connect.
 
     target
@@ -132,7 +132,7 @@ def connect(name, plug, target=None, wait=True):
     cmd = ["snap", "connect"]
     if not wait:
         cmd.append("--no-wait")
-    cmd.append(f"{name}:{plug}")
+    cmd.append(f"{name}:{connector}")
     if target is not None:
         cmd.append(target)
     _run(cmd)
@@ -251,7 +251,7 @@ def slots(name, slot=None, interface=None, connected=None):
     return _filter_conn_points("slot", name, slot, interface, connected)
 
 
-def disconnect(name, source, target=None, forget=False, wait=True):
+def disconnect(name, connector, target=None, forget=False, wait=True):
     """
     Disconnect a plug's/slot's connections.
 
@@ -265,7 +265,7 @@ def disconnect(name, source, target=None, forget=False, wait=True):
         The name of the snap to disconnect.
         The ``core`` snap must be spelled out as well.
 
-    source
+    connector
         The name of the snap's plug/slot to disconnect.
 
     target
@@ -287,7 +287,7 @@ def disconnect(name, source, target=None, forget=False, wait=True):
         cmd.append("--no-wait")
     if forget:
         cmd.append("--forget")
-    cmd.append(f"{name}:{source}")
+    cmd.append(f"{name}:{connector}")
     if target is not None:
         cmd.append(target)
     _run(cmd)

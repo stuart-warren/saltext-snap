@@ -394,11 +394,11 @@ def snap_disconnect_mock(snap_connections_name, snap_connections_core, snap_plug
             )
         return True
 
-    def _disconnect(name, source, **kwargs):
+    def _disconnect(name, connector, **kwargs):
         if name == "core":
-            return _disconnect_slot(name, source, **kwargs)
+            return _disconnect_slot(name, connector, **kwargs)
         if name == "bitwarden":
-            return _disconnect_plug(name, source, **kwargs)
+            return _disconnect_plug(name, connector, **kwargs)
         raise RuntimeError("Undefined test behavior")
 
     return Mock(spec=snap_module.disconnect, side_effect=_disconnect)
@@ -483,12 +483,12 @@ def testmode(request):
     (
         ("network", None, False),
         ("password-manager-service", None, "core:password-manager-service"),
+        ("password-manager-service", "core", "core:password-manager-service"),
         (
             "password-manager-service",
             "core:password-manager-service",
             "core:password-manager-service",
         ),
-        ("password-manager-service", "core", "core:password-manager-service"),
     ),
 )
 def test_connected(plug, target, changes, testmode):
@@ -533,7 +533,7 @@ def test_connected_validation(snap_connect_mock):
 def test_connected_target_discovery_no_plug(snap_plugs_mock, testmode):
     snap_plugs_mock.side_effect = None
     snap_plugs_mock.return_value = {}
-    ret = snap.connected("bitwarden", "password-manager-service", "core")
+    ret = snap.connected("bitwarden", "password-manager-service", target="core")
     assert ret["result"] is False
     assert "does not have a plug named" in ret["comment"]
     assert not ret["changes"]
@@ -577,7 +577,7 @@ def test_connected_target_discovery_error_handling(err, snap_slots_mock, testmod
 
 
 @pytest.mark.parametrize(
-    "name,source,target,changes",
+    "name,connector,target,changes",
     (
         ("bitwarden", "password-manager-service", None, False),
         ("bitwarden", "password-manager-service", "core:password-manager-service", False),
@@ -589,8 +589,8 @@ def test_connected_target_discovery_error_handling(err, snap_slots_mock, testmod
         ("core", "network", None, {"plugs": ["bitwarden:network", "bw:network"]}),
     ),
 )
-def test_disconnected(name, source, target, changes, testmode):
-    ret = snap.disconnected(name, source, target=target)
+def test_disconnected(name, connector, target, changes, testmode):
+    ret = snap.disconnected(name, connector, target=target)
     assert ret["result"] is not False
     if changes:
         typ = next(iter(changes))[:-1]
@@ -604,7 +604,7 @@ def test_disconnected(name, source, target, changes, testmode):
 
 
 @pytest.mark.usefixtures("testmode")
-def test_disconnected_no_source(snap_plugs_mock, snap_slots_mock):
+def test_disconnected_no_connector(snap_plugs_mock, snap_slots_mock):
     snap_plugs_mock.side_effect = snap_slots_mock.side_effect = None
     snap_plugs_mock.return_value = snap_slots_mock.return_value = {}
     ret = snap.disconnected("bitwarden", "foo")

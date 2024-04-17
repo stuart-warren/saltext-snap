@@ -27,14 +27,14 @@ def __virtual__():
         return False, "Did not find `snap` execution module"
 
 
-def connected(name, plug, target=None):
+def connected(name, connector, target=None):
     """
     Ensure a snap's plug is connected.
 
     name
         The name of the snap to connect.
 
-    plug
+    connector
         The name of the snap's plug to connect.
 
     target
@@ -54,13 +54,13 @@ def connected(name, plug, target=None):
     }
     try:
         if target is None:
-            target = f"core:{plug}"
+            target = f"core:{connector}"
         elif ":" not in target:
             try:
-                interface = __salt__["snap.plugs"](name)[plug]["interface"]
+                interface = __salt__["snap.plugs"](name)[connector]["interface"]
             except KeyError as err:
                 raise SaltInvocationError(
-                    f"The snap '{name}' does not have a plug named '{plug}'"
+                    f"The snap '{name}' does not have a plug named '{connector}'"
                 ) from err
             try:
                 possible_slots = __salt__["snap.slots"](target, interface=interface)
@@ -86,27 +86,30 @@ def connected(name, plug, target=None):
         target_snap, target_slot = target.split(":", maxsplit=1)
         for conn in curr["established"]:
             if (
-                conn["plug"]["plug"] == plug
+                conn["plug"]["plug"] == connector
                 and conn["slot"]["snap"] == target_snap
                 and conn["slot"]["slot"] == target_slot
             ):
                 return ret
         if __opts__["test"]:
             ret["result"] = None
-            ret[
-                "comment"
-            ] = f"Would have connected plug {name}:{plug} to slot {target_snap}:{target_slot}"
+            ret["comment"] = (
+                f"Would have connected plug {name}:{connector} to slot "
+                f"{target_snap}:{target_slot}"
+            )
             ret["changes"]["connected"] = f"{target_snap}:{target_slot}"
             return ret
-        __salt__["snap.connect"](name, plug, target=target)
+        __salt__["snap.connect"](name, connector, target=target)
         curr_new = __salt__["snap.connections"](name)
         for conn in curr_new["established"]:
             if (
-                conn["plug"]["plug"] == plug
+                conn["plug"]["plug"] == connector
                 and conn["slot"]["snap"] == target_snap
                 and conn["slot"]["slot"] == target_slot
             ):
-                ret["comment"] = f"Connected plug {name}:{plug} to slot {target_snap}:{target_slot}"
+                ret[
+                    "comment"
+                ] = f"Connected plug {name}:{connector} to slot {target_snap}:{target_slot}"
                 ret["changes"]["connected"] = f"{target_snap}:{target_slot}"
                 return ret
         raise CommandExecutionError("Tried to connect the plug, but the connection is not reported")
@@ -117,14 +120,14 @@ def connected(name, plug, target=None):
     return ret
 
 
-def disconnected(name, source, target=None):
+def disconnected(name, connector, target=None):
     """
     Ensure a snap's plug(s)/slot(s) is/are connected.
 
     name
         The name of the snap.
 
-    source
+    connector
         The name of the snap's plug/slot to disconnect.
 
     target
@@ -135,10 +138,10 @@ def disconnected(name, source, target=None):
     ret = {"name": name, "result": True, "comment": "The connection is already cut", "changes": {}}
     try:
         try:
-            if __salt__["snap.plugs"](name, source):
+            if __salt__["snap.plugs"](name, connector):
                 typ = "slot"
                 this = "plug"
-            elif __salt__["snap.slots"](name, source):
+            elif __salt__["snap.slots"](name, connector):
                 typ = "plug"
                 this = "slot"
             else:
@@ -156,7 +159,7 @@ def disconnected(name, source, target=None):
         if target:
             target_snap, target_entity = target.split(":", maxsplit=1)
         for conn in curr["established"]:
-            if conn[this]["snap"] != name or conn[this][this] != source:
+            if conn[this]["snap"] != name or conn[this][this] != connector:
                 continue
             if target and (conn[typ]["snap"] != target_snap or conn[typ][typ] != target_entity):
                 continue
@@ -170,11 +173,11 @@ def disconnected(name, source, target=None):
                 f"{typ}s": [f"{tgt}:{ent}" for tgt, ent in disconnect]
             }
             return ret
-        __salt__["snap.disconnect"](name, source, target=target)
+        __salt__["snap.disconnect"](name, connector, target=target)
         curr_new = __salt__["snap.connections"](name)
         still_present = []
         for conn in curr_new["established"]:
-            if conn[this]["snap"] != name or conn[this][this] != source:
+            if conn[this]["snap"] != name or conn[this][this] != connector:
                 continue
             if target and (conn[typ]["snap"] != target_snap or conn[typ][typ] != target_entity):
                 continue

@@ -1,6 +1,7 @@
 import contextlib
 import json
 import logging
+from importlib import reload
 from textwrap import dedent
 from unittest.mock import Mock
 from unittest.mock import patch
@@ -19,7 +20,7 @@ def configure_loader_modules(cmd_run):
     }
     # It seems the dunder functions are not called by the test suite, need
     # to initialize globals
-    snap.__init__(None)
+    snap.__init__(None)  # pylint: disable=unnecessary-dunder-call
     return {
         snap: module_globals,
     }
@@ -27,8 +28,37 @@ def configure_loader_modules(cmd_run):
 
 @pytest.fixture(params=(False,), autouse=True)
 def requests_available(request):
-    with patch("saltext.snap.modules.snap_mod.HAS_REQUESTS", request.param):
-        yield request.param
+    """
+    This fixture reloads the execution module to simulate
+    a) if True, requests being available
+    b) if None, requests being unavailable, but http.client working
+    c) if False, requests being unavailable and the REST API requests failing
+
+    This causes issues with references to the module in the global namespace
+    of other modules (e.g. state module unit tests).
+    Reconsider this if it becomes a problem down the line.
+    """
+    global snap
+    orig_import = __import__
+
+    def _import_mock(name, *args):
+        if name == "requests":
+            raise ImportError("No module named requests")
+        return orig_import(name, *args)
+
+    req = contextlib.nullcontext()
+    conn = contextlib.nullcontext()
+    if not request.param:
+        req = patch("builtins.__import__", side_effect=_import_mock)
+    with req:
+        snap = reload(snap)
+        snap.__init__(None)  # pylint: disable=unnecessary-dunder-call
+        if request.param is False:
+            conn = patch("saltext.snap.modules.snap_mod._conn", side_effect=snap.APIConnectionError)
+        with conn:
+            yield request.param
+    snap = reload(snap)
+    snap.__init__(None)  # pylint: disable=unnecessary-dunder-call
 
 
 @pytest.fixture
@@ -455,9 +485,13 @@ def conn():
 
 
 @pytest.fixture
-def sess():
+def sess(requests_available):
     _sess = Mock()
-    with patch("requests.Session", return_value=_sess):
+    if requests_available:
+        ctx = patch("requests.Session", return_value=_sess)
+    else:
+        ctx = patch("saltext.snap.modules.snap_mod.SnapdConnection", return_value=_sess)
+    with ctx:
         yield _sess
 
 
@@ -501,51 +535,66 @@ def test_disconnect(run_mock, target, wait, forget):
     assert ("--forget" in cmd) is forget
 
 
-def test_connections(sess, snap_connections_out, snap_connections):
-    sess.get.return_value.json.return_value = json.loads(snap_connections_out)
+@pytest.mark.usefixtures("requests_available")
+@pytest.mark.parametrize("requests_available", (True, None), indirect=True)
+def test_connections(sess, snap_connections_out, snap_connections, requests_available):
+    if requests_available is None:
+        sess.getresponse.return_value.read.return_value = snap_connections_out
+        expected = "/v2/connections?"
+    else:
+        sess.request.return_value.json.return_value = json.loads(snap_connections_out)
+        expected = "http://snapd/v2/connections?"
     res = snap.connections()
-    url = sess.get.call_args[0][0]
-    assert url.startswith("http://snapd/v2/connections?")
+    url = sess.request.call_args[0][1]
+    assert url.startswith(expected)
     assert "attrs=true" in url
     assert res == snap_connections
 
 
+@pytest.mark.usefixtures("requests_available")
+@pytest.mark.parametrize("requests_available", (True,), indirect=True)
 def test_connections_all(sess, snap_connections_all_out, snap_connections_all):
-    sess.get.return_value.json.return_value = json.loads(snap_connections_all_out)
+    sess.request.return_value.json.return_value = json.loads(snap_connections_all_out)
     res = snap.connections(all=True)
-    url = sess.get.call_args[0][0]
+    url = sess.request.call_args[0][1]
     assert url.startswith("http://snapd/v2/connections?")
     assert "attrs=true" in url
     assert "select=all" in url
     assert res == snap_connections_all
 
 
+@pytest.mark.usefixtures("requests_available")
+@pytest.mark.parametrize("requests_available", (True,), indirect=True)
 def test_connections_name(sess, snap_connections_name_out, snap_connections_name):
-    sess.get.return_value.json.return_value = json.loads(snap_connections_name_out)
+    sess.request.return_value.json.return_value = json.loads(snap_connections_name_out)
     res = snap.connections(name="bitwarden")
-    url = sess.get.call_args[0][0]
+    url = sess.request.call_args[0][1]
     assert url.startswith("http://snapd/v2/connections?")
     assert "attrs=true" in url
     assert "snap=bitwarden" in url
     assert res == snap_connections_name
 
 
+@pytest.mark.usefixtures("requests_available")
+@pytest.mark.parametrize("requests_available", (True,), indirect=True)
 def test_connections_interface(sess, snap_connections_interface_out, snap_connections_interface):
-    sess.get.return_value.json.return_value = json.loads(snap_connections_interface_out)
+    sess.request.return_value.json.return_value = json.loads(snap_connections_interface_out)
     res = snap.connections(interface="network")
-    url = sess.get.call_args[0][0]
+    url = sess.request.call_args[0][1]
     assert url.startswith("http://snapd/v2/connections?")
     assert "attrs=true" in url
     assert "interface=network" in url
     assert res == snap_connections_interface
 
 
+@pytest.mark.usefixtures("requests_available")
+@pytest.mark.parametrize("requests_available", (True,), indirect=True)
 def test_connections_interface_name(
     sess, snap_connections_interface_name_out, snap_connections_interface_name
 ):
-    sess.get.return_value.json.return_value = json.loads(snap_connections_interface_name_out)
+    sess.request.return_value.json.return_value = json.loads(snap_connections_interface_name_out)
     res = snap.connections(name="bitwarden", interface="network")
-    url = sess.get.call_args[0][0]
+    url = sess.request.call_args[0][1]
     assert url.startswith("http://snapd/v2/connections?")
     assert "attrs=true" in url
     assert "interface=network" in url
@@ -661,10 +710,12 @@ def test_install_already_installed(cmd_run):
         snap.install("hello-world")
 
 
+@pytest.mark.usefixtures("requests_available")
+@pytest.mark.parametrize("requests_available", (True,), indirect=True)
 def test_interfaces(sess, snap_interfaces_out, snap_interfaces):
-    sess.get.return_value.json.return_value = json.loads(snap_interfaces_out)
+    sess.request.return_value.json.return_value = json.loads(snap_interfaces_out)
     res = snap.interfaces()
-    url = sess.get.call_args[0][0]
+    url = sess.request.call_args[0][1]
     assert url.startswith("http://snapd/v2/interfaces?")
     assert "plugs=true" in url
     assert "slots=true" in url
@@ -672,17 +723,26 @@ def test_interfaces(sess, snap_interfaces_out, snap_interfaces):
     assert res == snap_interfaces
 
 
-def test_interfaces_all(sess, snap_interfaces_all_out, snap_interfaces_all):
-    sess.get.return_value.json.return_value = json.loads(snap_interfaces_all_out)
+@pytest.mark.usefixtures("requests_available")
+@pytest.mark.parametrize("requests_available", (True, None), indirect=True)
+def test_interfaces_all(sess, snap_interfaces_all_out, snap_interfaces_all, requests_available):
+    if requests_available is None:
+        sess.getresponse.return_value.read.return_value = snap_interfaces_all_out
+        expected = "/v2/interfaces?"
+    else:
+        sess.request.return_value.json.return_value = json.loads(snap_interfaces_all_out)
+        expected = "http://snapd/v2/interfaces?"
     res = snap.interfaces(all=True)
-    url = sess.get.call_args[0][0]
-    assert url.startswith("http://snapd/v2/interfaces?")
+    url = sess.request.call_args[0][1]
+    assert url.startswith(expected)
     assert "plugs=true" in url
     assert "slots=true" in url
     assert "select=all" in url
     assert res == snap_interfaces_all
 
 
+@pytest.mark.usefixtures("requests_available")
+@pytest.mark.parametrize("requests_available", (True,), indirect=True)
 @pytest.mark.parametrize("names", ("x11", ["x11", "xilinx-dma"]))
 def test_interfaces_name_all(names, sess, snap_interfaces_all_out, snap_interfaces_all):
     names_list = names
@@ -693,9 +753,9 @@ def test_interfaces_name_all(names, sess, snap_interfaces_all_out, snap_interfac
     exp = {k: v for k, v in snap_interfaces_all.items() if k in names_list}
     if isinstance(names, str):
         exp = exp[next(iter(exp))]
-    sess.get.return_value.json.return_value = resp
+    sess.request.return_value.json.return_value = resp
     res = snap.interfaces(names, all=True)
-    url = sess.get.call_args[0][0]
+    url = sess.request.call_args[0][1]
     assert url.startswith("http://snapd/v2/interfaces?")
     assert "plugs=true" in url
     assert "slots=true" in url
@@ -729,7 +789,7 @@ def test_is_installed(
     name, expected, snap_list_out, snap_list_api_out, cmd_run, sess, requests_available
 ):
     if requests_available:
-        sess.get.return_value.json.return_value = (
+        sess.request.return_value.json.return_value = (
             json.loads(snap_list_api_out)
             if expected
             else {
@@ -806,14 +866,14 @@ def test_list_cli_revisions(cmd_run, snap_list_revisions_out, snap_list):
 @pytest.mark.usefixtures("requests_available")
 @pytest.mark.parametrize("requests_available", (True,), indirect=True)
 def test_list_api(sess, snap_list_api_out, snap_list):
-    sess.get.return_value.json.return_value = json.loads(snap_list_api_out)
+    sess.request.return_value.json.return_value = json.loads(snap_list_api_out)
     assert snap.list_() == snap_list
 
 
 @pytest.mark.usefixtures("requests_available")
 @pytest.mark.parametrize("requests_available", (True,), indirect=True)
 def test_list_api_revisions(sess, snap_list_api_revisions_out, snap_list):
-    sess.get.return_value.json.return_value = json.loads(snap_list_api_revisions_out)
+    sess.request.return_value.json.return_value = json.loads(snap_list_api_revisions_out)
     res = snap.list_(revisions=True)
     assert set(res) == set(snap_list)
     for snp, data in res.items():
@@ -899,11 +959,13 @@ def test_option_unset(cmd_run):
     assert cmd_str == "snap unset foo bar"
 
 
+@pytest.mark.usefixtures("requests_available")
+@pytest.mark.parametrize("requests_available", (True,), indirect=True)
 @pytest.mark.parametrize("connected", (None, False, True))
 @pytest.mark.parametrize("interface", (None, "password-manager-service"))
 @pytest.mark.parametrize("plug", (None, "password-manager-service"))
 def test_plugs(connected, interface, plug, sess, snap_connections_all_out, snap_plugs):
-    sess.get.return_value.json.return_value = json.loads(snap_connections_all_out)
+    sess.request.return_value.json.return_value = json.loads(snap_connections_all_out)
     res = snap.plugs("bitwarden", plug=plug, interface=interface, connected=connected)
     exp = snap_plugs
     if connected is not None:
@@ -915,11 +977,13 @@ def test_plugs(connected, interface, plug, sess, snap_connections_all_out, snap_
     assert res == exp
 
 
+@pytest.mark.usefixtures("requests_available")
+@pytest.mark.parametrize("requests_available", (True,), indirect=True)
 @pytest.mark.parametrize("connected", (None, False, True))
 @pytest.mark.parametrize("interface", (None, "network"))
 @pytest.mark.parametrize("slot", (None, "network"))
 def test_slots(connected, interface, slot, sess, snap_connections_all_out, snap_slots):
-    sess.get.return_value.json.return_value = json.loads(snap_connections_all_out)
+    sess.request.return_value.json.return_value = json.loads(snap_connections_all_out)
     res = snap.slots("core", slot=slot, interface=interface, connected=connected)
     exp = snap_slots
     if connected is not None:

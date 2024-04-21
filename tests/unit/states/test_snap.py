@@ -504,8 +504,11 @@ def test_connected(plug, target, changes, testmode):
         assert not ret["changes"]
 
 
-@pytest.mark.parametrize("err", (snap_module.SnapNotFound, "something else went wrong"))
+# Cannot use snap_module.SnapNotFound here because it is reloaded by the
+# execution module tests, making the isinstance test fail.
+@pytest.mark.parametrize("err", ("SnapNotFound", "something else went wrong"))
 def test_connected_error_handling(err, snap_connections_mock, testmode):
+    err = getattr(snap_module, err, err)
     if isinstance(err, str):
         err = CommandExecutionError(err)
     else:
@@ -560,8 +563,11 @@ def test_connected_target_discovery_multiple_slots(snap_slots_mock, testmode):
     assert not ret["changes"]
 
 
-@pytest.mark.parametrize("err", (snap_module.SnapNotFound, "something else went wrong"))
+# Cannot use snap_module.SnapNotFound here because it is reloaded by the
+# execution module tests, making the isinstance test fail.
+@pytest.mark.parametrize("err", ("SnapNotFound", "something else went wrong"))
 def test_connected_target_discovery_error_handling(err, snap_slots_mock, testmode):
+    err = getattr(snap_module, err, err)
     if isinstance(err, str):
         err = CommandExecutionError(err)
     else:
@@ -613,8 +619,11 @@ def test_disconnected_no_connector(snap_plugs_mock, snap_slots_mock):
     assert not ret["changes"]
 
 
-@pytest.mark.parametrize("err", (snap_module.SnapNotFound, "something else went wrong"))
+# Cannot use snap_module.SnapNotFound here because it is reloaded by the
+# execution module tests, making the isinstance test fail.
+@pytest.mark.parametrize("err", ("SnapNotFound", "something else went wrong"))
 def test_disconnected_error_handling(err, snap_plugs_mock, testmode):
+    err = getattr(snap_module, err, err)
     if isinstance(err, str):
         err = CommandExecutionError(err)
     else:
@@ -836,9 +845,12 @@ def test_service_dead_mod_watch_multi(testmode):
     assert ("Would have" in ret["comment"]) is testmode
 
 
+# Cannot use snap_module.SnapNotFound here because it is reloaded by the
+# execution module tests, making the isinstance test fail.
+@pytest.mark.parametrize("err", ("SnapNotFound", "something else went wrong"))
 @pytest.mark.parametrize("func", ("enabled", "disabled"))
-@pytest.mark.parametrize("err", (snap_module.SnapNotFound, "something else went wrong"))
 def test_en_dis_abled_error_handling(err, func, snap_is_enabled_mock, testmode):
+    err = getattr(snap_module, err, err)
     if isinstance(err, str):
         err = CommandExecutionError(err)
     else:
@@ -1235,8 +1247,11 @@ def test_option_managed_multi(options, changes, testmode):
         assert "correct state" in ret["comment"]
 
 
-@pytest.mark.parametrize("err", (snap_module.SnapNotFound, "something else went wrong"))
+# Cannot use snap_module.SnapNotFound here because it is reloaded by the
+# execution module tests, making the isinstance test fail.
+@pytest.mark.parametrize("err", ("SnapNotFound", "something else went wrong"))
 def test_option_managed_error_handling(err, snap_options_mock, testmode):
+    err = getattr(snap_module, err, err)
     if isinstance(err, str):
         err = CommandExecutionError(err)
     else:

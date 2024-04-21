@@ -2,7 +2,9 @@ import json
 import logging
 import re
 import shlex
+import socket
 from datetime import datetime
+from urllib.parse import urlencode
 
 import salt.utils.path
 import salt.utils.yamlloader
@@ -14,13 +16,13 @@ try:
     import requests
     from urllib3.connection import HTTPConnection
     from urllib3.connectionpool import HTTPConnectionPool
-    from urllib.parse import urlencode
     from requests.adapters import HTTPAdapter
 
     HAS_REQUESTS = True
-    import socket
 except ImportError:
     HAS_REQUESTS = False
+    # Fallback to stdlib
+    import http.client
 
 
 log = logging.getLogger(__name__)
@@ -41,6 +43,13 @@ LIST_VERBOSE_FILTER = ("contact", "description", "icon", "links", "media", "webs
 class SnapNotFound(CommandExecutionError):
     def __init__(self, name):
         super().__init__(f'snap "{name}" is not installed')
+
+
+class APIConnectionError(CommandExecutionError):
+    """
+    Unifies http.client.HTTPException and requests.RequestException
+    for error handling in callers.
+    """
 
 
 def __virtual__():
@@ -651,12 +660,13 @@ def list_(name=None, revisions=False, verbose=False):
 
     verbose
         List more detailed information. This requires being able to query the
-        REST API (``requests`` lib). Defaults to false
+        REST API. Defaults to false
     """
-    if HAS_REQUESTS:
+    try:
         return _list_api(name, revisions, verbose=verbose)
-    if verbose:
-        raise CommandExecutionError("Cannot query REST API, missing `requests` library.")
+    except APIConnectionError as err:
+        if verbose:
+            raise CommandExecutionError(f"Cannot query REST API: {err}") from err
     return _list_cli(name, revisions)
 
 
@@ -1046,49 +1056,23 @@ def _flatten_dict(data, prefix=""):
 # https://stackoverflow.com/a/59594889
 
 
-class SnapdConnection(HTTPConnection):
-    def __init__(self):
-        super().__init__("localhost")
-
-    def connect(self):
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.connect("/run/snapd.socket")
-
-    def close(self):
-        self.sock.close()
-
-
-class SnapdConnectionPool(HTTPConnectionPool):
-    def __init__(self):
-        super().__init__("localhost")
-
-    def _new_conn(self):
-        return SnapdConnection()
-
-
-class SnapdAdapter(HTTPAdapter):
-    def get_connection(self, url, proxies=None):
-        return SnapdConnectionPool()
-
-
-class SnapdApi:
+class SnapdApiBase:
     def __init__(self, conn):
         self.conn = conn
 
     def get(self, path, query=None, **kwargs):
-        return self._check(self.conn.get(self._uri(path, query), **kwargs))
+        return self._check(self.request("GET", self._uri(path, query), **kwargs))
 
-    def post(self, path, query=None, **kwargs):
-        return self._check(self.conn.post(self._uri(path), **kwargs, json=query))
+    def post(self, path, **kwargs):
+        return self._check(self.request("POST", self._uri(path), **kwargs))
 
-    def patch(self, path, query=None, **kwargs):
-        return self._check(self.conn.patch(self._uri(path), **kwargs, json=query))
+    def patch(self, path, **kwargs):
+        return self._check(self.request("PATCH", self._uri(path), **kwargs))
 
     def delete(self, path, query=None, **kwargs):
-        return self._check(self.conn.delete(self._uri(path), **kwargs, json=query))
+        return self._check(self.request("DELETE", self._uri(path), **kwargs))
 
-    def _check(self, res):
-        data = res.json()
+    def _check(self, data):
         if data["status-code"] >= 400:
             if data["result"]["kind"] == "snap-not-found":
                 raise SnapNotFound(data["result"]["value"])
@@ -1105,21 +1089,77 @@ class SnapdApi:
                 elif isinstance(val, bool):
                     query[param] = str(val).lower()
             suffix += urlencode(query)
-        return f"http://snapd/v2/{path}{suffix}"
+        return f"/v2/{path}{suffix}"
+
+
+if HAS_REQUESTS:
+
+    class SnapdConnection(HTTPConnection):
+        def __init__(self):
+            super().__init__("localhost")
+
+        def connect(self):
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock.connect("/run/snapd.socket")
+
+        def close(self):
+            self.sock.close()
+
+    class SnapdConnectionPool(HTTPConnectionPool):
+        def __init__(self):
+            super().__init__("localhost")
+
+        def _new_conn(self):
+            return SnapdConnection()
+
+    class SnapdAdapter(HTTPAdapter):
+        def get_connection(self, url, proxies=None):
+            return SnapdConnectionPool()
+
+    class SnapdApi(SnapdApiBase):
+        def request(self, method, uri, query=None, **kwargs):
+            try:
+                return self.conn.request(method, f"http://snapd{uri}", json=query, **kwargs).json()
+            except requests.RequestException as err:
+                raise APIConnectionError(str(err)) from err
+
+else:
+
+    class SnapdConnection(http.client.HTTPConnection):  # pylint: disable=used-before-assignment
+        def __init__(self):
+            super().__init__("localhost")
+
+        def connect(self):
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock.connect("/run/snapd.socket")
+
+    class SnapdApi(SnapdApiBase):
+        def request(self, method, path, query=None, **kwargs):
+            body = None
+            if query is not None:
+                body = json.dumps(query).encode()
+            try:
+                self.conn.request(method, path, body=body, **kwargs)
+                return json.loads(self.conn.getresponse().read())
+            except (http.client.HTTPException, json.JSONDecodeError) as err:
+                raise APIConnectionError(str(err)) from err
 
 
 def _conn():
     if CKEY not in __context__:
-        session = requests.Session()
-        session.mount("http://snapd/", SnapdAdapter())
+        if HAS_REQUESTS:
+            session = requests.Session()
+            session.mount("http://snapd/", SnapdAdapter())
+        else:
+            session = SnapdConnection()
         __context__[CKEY] = SnapdApi(session)
     return __context__[CKEY]
 
 
 def _list_api(name=None, revisions=False, verbose=False):
     """
-    This is the preferred method of listing installed snaps,
-    but requires ``requests``.
+    This is the preferred method of listing installed snaps.
+    It should work with and without ``requests`` installed.
     """
     query = {}
     if name:

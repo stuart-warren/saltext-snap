@@ -107,9 +107,9 @@ def connected(name, connector, target=None):
                 and conn["slot"]["snap"] == target_snap
                 and conn["slot"]["slot"] == target_slot
             ):
-                ret[
-                    "comment"
-                ] = f"Connected plug {name}:{connector} to slot {target_snap}:{target_slot}"
+                ret["comment"] = (
+                    f"Connected plug {name}:{connector} to slot {target_snap}:{target_slot}"
+                )
                 ret["changes"]["connected"] = f"{target_snap}:{target_slot}"
                 return ret
         raise CommandExecutionError("Tried to connect the plug, but the connection is not reported")
@@ -156,6 +156,7 @@ def disconnected(name, connector, target=None):
             return ret
         curr = __salt__["snap.connections"](name)
         disconnect = []
+        target_snap = target_entity = None
         if target:
             target_snap, target_entity = target.split(":", maxsplit=1)
         for conn in curr["established"]:

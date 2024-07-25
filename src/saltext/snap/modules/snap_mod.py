@@ -14,9 +14,9 @@ from salt.exceptions import SaltInvocationError
 
 try:
     import requests
+    from requests.adapters import HTTPAdapter
     from urllib3.connection import HTTPConnection
     from urllib3.connectionpool import HTTPConnectionPool
-    from requests.adapters import HTTPAdapter
 
     HAS_REQUESTS = True
 except ImportError:
@@ -1238,6 +1238,7 @@ def _list_cli(name=None, revisions=False):
       * the tracking channel's branch is cropped
       * some rows have empty fields (try mode, for example)
     """
+
     # It could mostly be fixed by only listing the names and then
     # running those through snap info --verbose though.
     def _amend(data):

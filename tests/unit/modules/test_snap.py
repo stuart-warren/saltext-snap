@@ -8,9 +8,10 @@ from unittest.mock import patch
 
 import pytest
 import salt.modules.cmdmod
-import saltext.snap.modules.snap_mod as snap
 from salt.exceptions import CommandExecutionError
 from salt.exceptions import SaltInvocationError
+
+import saltext.snap.modules.snap_mod as snap
 
 
 @pytest.fixture
@@ -69,9 +70,9 @@ def cmd_run():
         if isinstance(run.return_value, dict):
             return run.return_value
         return {
-            "stdout": run.return_value
-            if run.return_value is not None
-            else "potentially gar?bled output",
+            "stdout": (
+                run.return_value if run.return_value is not None else "potentially gar?bled output"
+            ),
             "stderr": "",
             "retcode": 0,
         }
@@ -444,9 +445,11 @@ def run_mock():
             if isinstance(run.return_value, dict):
                 return run.return_value
             return {
-                "stdout": run.return_value
-                if run.return_value is not None
-                else "potentially gar?bled output",
+                "stdout": (
+                    run.return_value
+                    if run.return_value is not None
+                    else "potentially gar?bled output"
+                ),
                 "stderr": "",
                 "retcode": 0,
             }
@@ -626,8 +629,8 @@ def test_hold_with_duration(run_mock):
 def test_info(
     verbose, run_mock, snap_info_out, snap_info_verbose_out, snap_info, snap_info_verbose
 ):
-    run_mock.side_effect = (
-        lambda c, **_: snap_info_verbose_out if "--verbose" in c else snap_info_out
+    run_mock.side_effect = lambda c, **_: (
+        snap_info_verbose_out if "--verbose" in c else snap_info_out
     )
     res = snap.info("hello-world", verbose=verbose)
     if verbose:

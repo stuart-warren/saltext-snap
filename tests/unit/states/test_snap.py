@@ -2,10 +2,11 @@ from unittest.mock import Mock
 from unittest.mock import patch
 
 import pytest
-import saltext.snap.modules.snap_mod as snap_module
-import saltext.snap.states.snap_mod as snap
 from salt.defaults import NOT_SET
 from salt.exceptions import CommandExecutionError
+
+import saltext.snap.modules.snap_mod as snap_module
+import saltext.snap.states.snap_mod as snap
 
 
 @pytest.fixture

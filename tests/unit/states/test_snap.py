@@ -972,6 +972,7 @@ def test_installed(
         snap_unhold_mock.assert_not_called()
 
 
+@pytest.mark.skip_on_windows
 @pytest.mark.parametrize(
     "name,changes,asserts_imported",
     (
@@ -1051,6 +1052,7 @@ def test_installed_with_file_requires_absolute_path():
     assert "not absolute" in ret["comment"]
 
 
+@pytest.mark.skip_on_windows
 def test_installed_with_file_checks_path_exists(testmode):
     ret = snap.installed("/tmp/bw_60.snap")
     assert (ret["result"] is False) is not testmode
@@ -1059,6 +1061,7 @@ def test_installed_with_file_checks_path_exists(testmode):
     assert ("would be an error" in ret["comment"]) is testmode
 
 
+@pytest.mark.skip_on_windows
 @pytest.mark.parametrize(
     "assertions,testmode",
     ((None, False), (None, True), ("/tmp/bw_60.snap", False)),

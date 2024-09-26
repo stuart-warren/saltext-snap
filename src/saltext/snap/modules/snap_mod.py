@@ -1,8 +1,14 @@
+"""
+Interface with the Snapd REST API and the ``snap`` CLI.
+"""
+
 import json
 import logging
 import re
 import shlex
 import socket
+from abc import ABC
+from abc import abstractmethod
 from datetime import datetime
 from urllib.parse import urlencode
 
@@ -59,8 +65,8 @@ def __virtual__():
 
 
 def __init__(_):
-    global LIST_RE
-    global SERVICE_RE
+    global LIST_RE  # pylint: disable=global-statement
+    global SERVICE_RE  # pylint: disable=global-statement
     # This regex is a best effort, but some special rows will not match,
     # usually because of empty fields (in try mode, for example)
     LIST_RE = re.compile(
@@ -148,7 +154,7 @@ def connect(name, connector, target=None, wait=True):
     return True
 
 
-def connections(name=None, interface=None, all=False):
+def connections(name=None, interface=None, all=False):  # pylint: disable=redefined-builtin
     """
     List interface connection information.
 
@@ -357,10 +363,10 @@ def hold(name, duration=None):
         with a unit. If unspecified, holds forever until the snap
         is manually unheld.
     """
-    hold = "--hold"
+    hold_arg = "--hold"
     if duration:
-        hold += f"={duration}"
-    cmd = ["snap", "refresh", hold, name]
+        hold_arg += f"={duration}"
+    cmd = ["snap", "refresh", hold_arg, name]
     _run(cmd)
     return True
 
@@ -424,7 +430,7 @@ def info(name, verbose=False):
     return ret
 
 
-def interfaces(name=None, all=False):
+def interfaces(name=None, all=False):  # pylint: disable=redefined-builtin
     """
     Query interface types.
 
@@ -467,7 +473,9 @@ def interfaces(name=None, all=False):
     return ret
 
 
-def install(name, channel=None, revision=None, classic=False, refresh=False):
+def install(
+    name, channel=None, revision=None, classic=False, refresh=False
+):  # pylint: disable=redefined-outer-name
     """
     Install a snap.
 
@@ -820,7 +828,7 @@ def refresh(name, channel=None, revision=None, classic=False):
     return install(name, channel=channel, revision=revision, classic=classic, refresh=True)
 
 
-def remove(name, revision=None, purge=False):
+def remove(name, revision=None, purge=False):  # pylint: disable=redefined-outer-name
     """
     Remove a snap.
 
@@ -887,7 +895,7 @@ def service_running(name):
         raise CommandExecutionError(f"No such service: '{name}'") from err
 
 
-def service_start(name, enable=False):
+def service_start(name, enable=False):  # pylint: disable=redefined-outer-name
     """
     Start a snap's service(s).
 
@@ -909,7 +917,7 @@ def service_start(name, enable=False):
     return True
 
 
-def service_stop(name, disable=False):
+def service_stop(name, disable=False):  # pylint: disable=redefined-outer-name
     """
     Stop a snap's service(s).
 
@@ -1056,9 +1064,13 @@ def _flatten_dict(data, prefix=""):
 # https://stackoverflow.com/a/59594889
 
 
-class SnapdApiBase:
+class SnapdApiBase(ABC):
     def __init__(self, conn):
         self.conn = conn
+
+    @abstractmethod
+    def request(self, method, path, query=None, **kwargs):
+        raise NotImplementedError
 
     def get(self, path, query=None, **kwargs):
         return self._check(self.request("GET", self._uri(path, query), **kwargs))
@@ -1070,7 +1082,7 @@ class SnapdApiBase:
         return self._check(self.request("PATCH", self._uri(path), **kwargs))
 
     def delete(self, path, query=None, **kwargs):
-        return self._check(self.request("DELETE", self._uri(path), **kwargs))
+        return self._check(self.request("DELETE", self._uri(path, query), **kwargs))
 
     def _check(self, data):
         if data["status-code"] >= 400:
@@ -1097,9 +1109,9 @@ if HAS_REQUESTS:
     class SnapdConnection(HTTPConnection):
         def __init__(self):
             super().__init__("localhost")
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 
         def connect(self):
-            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self.sock.connect("/run/snapd.socket")
 
         def close(self):
@@ -1117,9 +1129,9 @@ if HAS_REQUESTS:
             return SnapdConnectionPool()
 
     class SnapdApi(SnapdApiBase):
-        def request(self, method, uri, query=None, **kwargs):
+        def request(self, method, path, query=None, **kwargs):
             try:
-                return self.conn.request(method, f"http://snapd{uri}", json=query, **kwargs).json()
+                return self.conn.request(method, f"http://snapd{path}", json=query, **kwargs).json()
             except requests.RequestException as err:
                 raise APIConnectionError(str(err)) from err
 
@@ -1128,9 +1140,9 @@ else:
     class SnapdConnection(http.client.HTTPConnection):  # pylint: disable=used-before-assignment
         def __init__(self):
             super().__init__("localhost")
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 
         def connect(self):
-            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self.sock.connect("/run/snapd.socket")
 
     class SnapdApi(SnapdApiBase):
@@ -1263,10 +1275,10 @@ def _list_cli(name=None, revisions=False):
         if name and "no matching snaps installed" in str(err):
             return {}
         raise
-    for info in ret.values():
+    for snap in ret.values():
         if revisions:
-            for rev in info:
+            for rev in snap:
                 _amend(rev)
         else:
-            _amend(info)
+            _amend(snap)
     return ret

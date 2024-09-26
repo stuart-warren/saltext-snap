@@ -24,7 +24,7 @@ def snap_list_mock(snap_list, request, global_state):
     ret = getattr(request, "param", snap_list)
     global_state["snap_list"] = ret
 
-    def _list(name=None, **kwargs):
+    def _list(name=None, **kwargs):  # pylint: disable=unused-argument
         base = {snp: data for snp, data in ret.items() if snp not in global_state["removed"]}
         if name:
             if name not in base:
@@ -49,7 +49,9 @@ def snap_list_upgrades_mock(snap_refresh_list, global_state):
 
 @pytest.fixture
 def snap_install_mock(global_state):
-    def _install(name, channel=None, revision=None, classic=False, refresh=False):
+    def _install(
+        name, channel=None, revision=None, classic=False, refresh=False
+    ):  # pylint: disable=unused-argument
         if name in global_state["snap_list"]:
             if not refresh:
                 raise CommandExecutionError("Already installed")
@@ -126,7 +128,7 @@ def snap_disable_mock(global_state):
 
 @pytest.fixture
 def snap_remove_mock(global_state):
-    def _remove(name, **kwargs):
+    def _remove(name, **kwargs):  # pylint: disable=unused-argument
         if name not in global_state["removed"]:
             global_state["removed"].append(name)
 
@@ -173,7 +175,7 @@ def snap_service_start_mock(snap_services):
 
 @pytest.fixture
 def snap_service_restart_mock(snap_services):
-    def _restart(name, **kwargs):
+    def _restart(name, **kwargs):  # pylint: disable=unused-argument
         snap_services[name]["running"] = True
 
     return Mock(spec=snap_module.service_restart, side_effect=_restart)
@@ -196,7 +198,7 @@ def snap_options_mock(snap_options):
 
 @pytest.fixture
 def snap_option_set_mock(snap_options):
-    def _set(name, option, value):
+    def _set(name, option, value):  # pylint: disable=unused-argument
         snap_options[option] = value
         return True
 
@@ -205,7 +207,7 @@ def snap_option_set_mock(snap_options):
 
 @pytest.fixture
 def snap_option_unset_mock(snap_options):
-    def _unset(name, option):
+    def _unset(name, option):  # pylint: disable=unused-argument
         snap_options.pop(option)
         return True
 
@@ -229,7 +231,7 @@ def snap_info_mock(snap_info_file):
 
 @pytest.fixture
 def snap_connections_mock(snap_connections_name, snap_connections_core):
-    def _connections(name=None, **kwargs):
+    def _connections(name=None, **kwargs):  # pylint: disable=unused-argument
         if name == "core":
             return snap_connections_core
         return snap_connections_name
@@ -239,7 +241,7 @@ def snap_connections_mock(snap_connections_name, snap_connections_core):
 
 @pytest.fixture
 def snap_plugs_mock(snap_plugs):
-    def _plugs(name, plug=None, interface=None, **kwargs):
+    def _plugs(name, plug=None, interface=None, **kwargs):  # pylint: disable=unused-argument
         if name != "bitwarden":
             return {}
         if plug is not None:
@@ -258,7 +260,7 @@ def snap_plugs_mock(snap_plugs):
 
 @pytest.fixture
 def snap_slots_mock(snap_slots):
-    def _slots(name, slot=None, interface=None, **kwargs):
+    def _slots(name, slot=None, interface=None, **kwargs):  # pylint: disable=unused-argument
         if name != "core":
             return {}
         ret = snap_slots
@@ -275,7 +277,7 @@ def snap_slots_mock(snap_slots):
 
 @pytest.fixture
 def snap_connect_mock(snap_connections_name, snap_plugs, snap_slots):
-    def _connect(name, plug, *args, **kwargs):
+    def _connect(name, plug, *args, **kwargs):  # pylint: disable=unused-argument
         snap_slots[plug]["connections"].append({"snap": name, "plug": plug})
         snap_plugs[plug]["connections"].append({"snap": "core", "slot": plug})
         snap_connections_name["established"].append(
@@ -310,7 +312,7 @@ def snap_connect_mock(snap_connections_name, snap_plugs, snap_slots):
 
 @pytest.fixture
 def snap_disconnect_mock(snap_connections_name, snap_connections_core, snap_plugs, snap_slots):
-    def _disconnect_plug(name, plug, **kwargs):
+    def _disconnect_plug(name, plug, **kwargs):  # pylint: disable=unused-argument
         snap_slots[plug]["connections"].remove({"snap": name, "plug": plug})
         snap_plugs[plug]["connections"].remove({"snap": "core", "slot": plug})
         snap_connections_name["established"].remove(
@@ -342,7 +344,7 @@ def snap_disconnect_mock(snap_connections_name, snap_connections_core, snap_plug
     def _find_slot(slot):
         return next(iter(x for x in snap_connections_core["slots"] if x["slot"] == slot))
 
-    def _disconnect_slot(name, slot, target=None, **kwargs):
+    def _disconnect_slot(name, slot, target=None, **kwargs):  # pylint: disable=unused-argument
         if target is None:
             targets = ["bitwarden", "bw"]
         else:
@@ -534,7 +536,8 @@ def test_connected_validation(snap_connect_mock):
     assert not ret["changes"]
 
 
-def test_connected_target_discovery_no_plug(snap_plugs_mock, testmode):
+@pytest.mark.usefixtures("testmode")
+def test_connected_target_discovery_no_plug(snap_plugs_mock):
     snap_plugs_mock.side_effect = None
     snap_plugs_mock.return_value = {}
     ret = snap.connected("bitwarden", "password-manager-service", target="core")
@@ -543,7 +546,8 @@ def test_connected_target_discovery_no_plug(snap_plugs_mock, testmode):
     assert not ret["changes"]
 
 
-def test_connected_target_discovery_no_slot(snap_slots_mock, testmode):
+@pytest.mark.usefixtures("testmode")
+def test_connected_target_discovery_no_slot(snap_slots_mock):
     snap_slots_mock.side_effect = None
     snap_slots_mock.return_value = {}
     ret = snap.connected("bitwarden", "password-manager-service", target="core")
@@ -552,7 +556,8 @@ def test_connected_target_discovery_no_slot(snap_slots_mock, testmode):
     assert not ret["changes"]
 
 
-def test_connected_target_discovery_multiple_slots(snap_slots_mock, testmode):
+@pytest.mark.usefixtures("testmode")
+def test_connected_target_discovery_multiple_slots(snap_slots_mock):
     snap_slots_mock.side_effect = None
     snap_slots_mock.return_value = {
         "slot-a": {"interface": "password-manager-service"},
@@ -989,10 +994,10 @@ def test_installed_with_file(
     snap_list,
     testmode,
 ):
-    def _reinstall(*args, **kwargs):
+    def _reinstall(*args, **kwargs):  # pylint: disable=unused-argument
         snap_list["bw"]["revision"] = "61"
 
-    def _install(*args, **kwargs):
+    def _install(*args, **kwargs):  # pylint: disable=unused-argument
         snap_list["bw2"] = snap_list["bw"].copy()
 
     if changes:
@@ -1310,6 +1315,7 @@ def test_option_managed_validation(snap_option_set_mock):
     assert not ret["changes"]
 
 
+@pytest.mark.usefixtures("testmode")
 @pytest.mark.parametrize(
     "name,value,options",
     (
@@ -1319,7 +1325,7 @@ def test_option_managed_validation(snap_option_set_mock):
         ("foo", "bar", {"baz": "quux"}),
     ),
 )
-def test_option_managed_requires_either_name_and_value_or_dict(name, value, options, testmode):
+def test_option_managed_requires_either_name_and_value_or_dict(name, value, options):
     """
     Check that requirements are fulfilled and that value has to be set explicitly
     (since None is a meaningful value here).

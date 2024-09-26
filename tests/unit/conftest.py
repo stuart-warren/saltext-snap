@@ -1,3 +1,5 @@
+# pylint: disable=too-many-lines
+
 import os
 from datetime import datetime
 from datetime import timezone

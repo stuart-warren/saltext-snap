@@ -39,7 +39,7 @@ def requests_available(request):
     of other modules (e.g. state module unit tests).
     Reconsider this if it becomes a problem down the line.
     """
-    global snap
+    global snap  # pylint: disable=global-statement
     orig_import = __import__
 
     def _import_mock(name, *args):
@@ -66,7 +66,7 @@ def requests_available(request):
 def cmd_run():
     run = Mock(spec=salt.modules.cmdmod.run_all)
 
-    def _run(*args, **kwargs):
+    def _run(*args, **kwargs):  # pylint: disable=unused-argument
         if isinstance(run.return_value, dict):
             return run.return_value
         return {
@@ -440,7 +440,7 @@ def snap_interfaces_all_out():
 
 @pytest.fixture
 def run_mock():
-    def _run(*args, **kwargs):
+    def _run(*args, **kwargs):  # pylint: disable=unused-argument
         if kwargs.get("full"):
             if isinstance(run.return_value, dict):
                 return run.return_value
@@ -676,6 +676,7 @@ def test_install(channel, revision, classic, refresh, cmd_run):
         assert f"--channel {channel}" in cmd_str
 
 
+@pytest.mark.usefixtures("run_mock")
 @pytest.mark.parametrize(
     "channel,err",
     (
@@ -694,7 +695,7 @@ def test_install(channel, revision, classic, refresh, cmd_run):
         ("foo/stable/bar/baz", "Invalid channel name"),
     ),
 )
-def test_install_channel_validation(channel, err, run_mock):
+def test_install_channel_validation(channel, err):
     if err:
         ctx = pytest.raises(SaltInvocationError, match=err)
     else:
@@ -1054,7 +1055,7 @@ def test_services(cmd_run, snap_services_out, snap_services):
         ),
     ),
 )
-def test_services_filtering(name, snp, expected, run_mock, snap_services_out, snap_services):
+def test_services_filtering(name, snp, expected, run_mock, snap_services_out):
     run_mock.return_value = snap_services_out
     assert set(snap.services(name, snp)) == set(expected)
 
@@ -1072,7 +1073,7 @@ def test_service_status(func, expected):
 
 @pytest.mark.usefixtures("cmd_run_services")
 @pytest.mark.parametrize("func", ("service_enabled", "service_running", "services"))
-def test_service_status_missing_service(func, snap_services_out):
+def test_service_status_missing_service(func):
     with pytest.raises(CommandExecutionError, match="No such service"):
         getattr(snap, func)("foo.bar")
 

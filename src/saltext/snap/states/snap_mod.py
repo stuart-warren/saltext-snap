@@ -1,3 +1,7 @@
+"""
+Manage snaps, plugs and snap services statefully.
+"""
+
 import json
 import logging
 import time
@@ -555,7 +559,9 @@ def removed(name, purge=False):
     return ret
 
 
-def service_running(name, service=None, enabled=None, timeout=10, reload=False):
+def service_running(
+    name, service=None, enabled=None, timeout=10
+):  # pylint: disable=redefined-outer-name
     """
     Ensure a snap service is running.
     This state supports the ``watch`` requisite.
@@ -644,7 +650,9 @@ def service_running(name, service=None, enabled=None, timeout=10, reload=False):
     return ret
 
 
-def service_dead(name, service=None, disabled=None, timeout=10):
+def service_dead(
+    name, service=None, disabled=None, timeout=10
+):  # pylint: disable=redefined-outer-name
     """
     Ensure a snap service is dead.
     This state supports the ``watch`` requisite.
@@ -729,7 +737,7 @@ def service_dead(name, service=None, disabled=None, timeout=10):
     return ret
 
 
-def _check_service_changes(name, service, running, enabled):
+def _check_service_changes(name, service, running, enabled):  # pylint: disable=redefined-outer-name
     if service:
         services = __salt__["snap.services"](f"{name}.{service}")
     else:

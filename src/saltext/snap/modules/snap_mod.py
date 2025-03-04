@@ -1120,6 +1120,8 @@ def set_cookie(query=None):
 
 if HAS_REQUESTS:
 
+    print('has requests')
+
     class SnapdConnection(HTTPConnection):
         def __init__(self):
             super().__init__("localhost")
@@ -1151,6 +1153,8 @@ if HAS_REQUESTS:
 
 else:
 
+    print('no requests')
+
     class SnapdConnection(http.client.HTTPConnection):  # pylint: disable=used-before-assignment
         def __init__(self):
             super().__init__("localhost")
@@ -1172,13 +1176,16 @@ else:
 
 
 def _conn():
+    print("in _conn()")
     if CKEY not in __context__:
+        print(f"__context__ is {__context__}")
         if HAS_REQUESTS:
             session = requests.Session()
             session.mount("http://snapd/", SnapdAdapter())
         else:
             session = SnapdConnection()
         __context__[CKEY] = SnapdApi(session)
+    print(f"__context__ is now {__context__}")
     return __context__[CKEY]
 
 

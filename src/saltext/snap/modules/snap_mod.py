@@ -1123,8 +1123,6 @@ def set_cookie(query=None):
 
 if HAS_REQUESTS:
 
-    print('has requests')
-
     class SnapdConnection(HTTPConnection):
         def __init__(self):
             super().__init__("localhost")
@@ -1153,14 +1151,11 @@ if HAS_REQUESTS:
     class SnapdApi(SnapdApiBase):
         def request(self, method, path, query=None, **kwargs):
             try:
-                print(f'body is {set_cookie(query)}')
                 return self.conn.request(method, f"http://snapd{path}", json=set_cookie(query), **kwargs).json()
             except requests.RequestException as err:
                 raise APIConnectionError(str(err)) from err
 
 else:
-
-    print('no requests')
 
     class SnapdConnection(http.client.HTTPConnection):  # pylint: disable=used-before-assignment
         def __init__(self):
@@ -1175,7 +1170,6 @@ else:
             body = None
             query = set_cookie(query)
             body = json.dumps(query).encode()
-            print(f'body is {body}')
             try:
                 self.conn.request(method, path, body=body, **kwargs)
                 return json.loads(self.conn.getresponse().read())
@@ -1184,7 +1178,6 @@ else:
 
 
 def _conn():
-    print("in _conn()")
     if CKEY not in __context__:
         if HAS_REQUESTS:
             session = requests.Session()
@@ -1192,7 +1185,6 @@ def _conn():
         else:
             session = SnapdConnection()
         __context__[CKEY] = SnapdApi(session)
-    print(f"__context__ is {__context__[CKEY]}")
     return __context__[CKEY]
 
 

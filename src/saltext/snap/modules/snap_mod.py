@@ -186,7 +186,9 @@ def connections(name=None, interface=None, all=False):  # pylint: disable=redefi
         query["select"] = "all"
     if interface:
         query["interface"] = interface
-    return _conn().get("connections", query)
+    res = _conn().get("connections", query)
+    print(res)
+    return res
 
 
 def _filter_conn_points(typ, name, entity, interface, connected):
@@ -1085,7 +1087,7 @@ class SnapdApiBase(ABC):
         return self._check(self.request("DELETE", self._uri(path, query), **kwargs))
 
     def _check(self, data):
-        if data["status-code"] >= 400:
+        if int(data["status-code"]) >= 400:
             if data["result"]["kind"] == "snap-not-found":
                 raise SnapNotFound(data["result"]["value"])
             raise CommandExecutionError(f"{data['type']}: {data['result']['message']}")
@@ -1104,20 +1106,11 @@ class SnapdApiBase(ABC):
         return f"/v2/{path}{suffix}"
 
 
-def set_cookie(query=None):
-    """
-    Set a cookie for the snapd API.
-
-    CLI Example:
-
-    .. code-block:: bash
-
-        salt '*' snap.set_cookie context-id=12345
-    """
+def _set_cookie(query=None):
     import os
     cookie = os.environ.get("SNAP_COOKIE", "")
     if not query:
-        return {"context-id": cookie}
+        query = {}
     query["context-id"] = cookie
     return query
 
@@ -1151,7 +1144,7 @@ if HAS_REQUESTS:
     class SnapdApi(SnapdApiBase):
         def request(self, method, path, query=None, **kwargs):
             try:
-                return self.conn.request(method, f"http://snapd{path}", json=set_cookie(query), **kwargs).json()
+                return self.conn.request(method, f"http://snapd{path}", json=_set_cookie(query), **kwargs).json()
             except requests.RequestException as err:
                 raise APIConnectionError(str(err)) from err
 
@@ -1168,7 +1161,7 @@ else:
     class SnapdApi(SnapdApiBase):
         def request(self, method, path, query=None, **kwargs):
             body = None
-            query = set_cookie(query)
+            query = _set_cookie(query)
             body = json.dumps(query).encode()
             try:
                 self.conn.request(method, path, body=body, **kwargs)

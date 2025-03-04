@@ -1136,7 +1136,7 @@ if HAS_REQUESTS:
 
     class SnapdAdapter(HTTPAdapter):
         def __init__(self):
-            super().__init__("localhost")
+            super().__init__()
 
         def get_connection_with_tls_context(self, request, verify, proxies=None, cert=None):
             return SnapdConnectionPool()

@@ -1,5 +1,5 @@
 """
-Interface with the Snapd REST API and the ``snap`` CLI.
+Interface with the Snapd REST API
 """
 
 import json
@@ -1104,6 +1104,20 @@ class SnapdApiBase(ABC):
         return f"/v2/{path}{suffix}"
 
 
+def set_cookie(query=None):
+    """
+    Set a cookie for the snapd API.
+    CLI Example:
+    .. code-block:: bash
+        salt '*' snap.set_cookie context-id=12345
+    """
+    import os
+    cookie = os.environ.get("SNAP_COOKIE", "")
+    if not query:
+        return {"context-id": cookie}
+    query["context-id"] = cookie
+    return query
+
 if HAS_REQUESTS:
 
     class SnapdConnection(HTTPConnection):
@@ -1131,7 +1145,7 @@ if HAS_REQUESTS:
     class SnapdApi(SnapdApiBase):
         def request(self, method, path, query=None, **kwargs):
             try:
-                return self.conn.request(method, f"http://snapd{path}", json=query, **kwargs).json()
+                return self.conn.request(method, f"http://snapd{path}", json=set_cookie(query), **kwargs).json()
             except requests.RequestException as err:
                 raise APIConnectionError(str(err)) from err
 
@@ -1148,8 +1162,8 @@ else:
     class SnapdApi(SnapdApiBase):
         def request(self, method, path, query=None, **kwargs):
             body = None
-            if query is not None:
-                body = json.dumps(query).encode()
+            query = set_cookie(query)
+            body = json.dumps(query).encode()
             try:
                 self.conn.request(method, path, body=body, **kwargs)
                 return json.loads(self.conn.getresponse().read())

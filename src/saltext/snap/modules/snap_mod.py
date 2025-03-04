@@ -1107,8 +1107,11 @@ class SnapdApiBase(ABC):
 def set_cookie(query=None):
     """
     Set a cookie for the snapd API.
+
     CLI Example:
+
     .. code-block:: bash
+
         salt '*' snap.set_cookie context-id=12345
     """
     import os
@@ -1125,9 +1128,9 @@ if HAS_REQUESTS:
     class SnapdConnection(HTTPConnection):
         def __init__(self):
             super().__init__("localhost")
-            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 
         def connect(self):
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self.sock.connect("/run/snapd.socket")
 
         def close(self):
@@ -1141,12 +1144,16 @@ if HAS_REQUESTS:
             return SnapdConnection()
 
     class SnapdAdapter(HTTPAdapter):
-        def get_connection(self, url, proxies=None):
+        def __init__(self):
+            super().__init__("localhost")
+
+        def get_connection_with_tls_context(self, request, verify, proxies=None, cert=None):
             return SnapdConnectionPool()
 
     class SnapdApi(SnapdApiBase):
         def request(self, method, path, query=None, **kwargs):
             try:
+                print(f'body is {set_cookie(query)}')
                 return self.conn.request(method, f"http://snapd{path}", json=set_cookie(query), **kwargs).json()
             except requests.RequestException as err:
                 raise APIConnectionError(str(err)) from err
@@ -1168,6 +1175,7 @@ else:
             body = None
             query = set_cookie(query)
             body = json.dumps(query).encode()
+            print(f'body is {body}')
             try:
                 self.conn.request(method, path, body=body, **kwargs)
                 return json.loads(self.conn.getresponse().read())
@@ -1178,14 +1186,13 @@ else:
 def _conn():
     print("in _conn()")
     if CKEY not in __context__:
-        print(f"__context__ is {__context__}")
         if HAS_REQUESTS:
             session = requests.Session()
             session.mount("http://snapd/", SnapdAdapter())
         else:
             session = SnapdConnection()
         __context__[CKEY] = SnapdApi(session)
-    print(f"__context__ is now {__context__}")
+    print(f"__context__ is {__context__[CKEY]}")
     return __context__[CKEY]
 
 
